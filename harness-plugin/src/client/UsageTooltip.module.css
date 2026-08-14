@@ -127,7 +127,8 @@
   gap: 3px;
 }
 
-/* Chart area: the SVG fills the full content width, the y-axis labels
+/* Chart area: the SVG fills the content width and the full height
+ * MINUS the bottom strip reserved for x-axis labels. The y-axis labels
  * sit on the left edge in absolute terms, the x-axis labels are
  * positioned by percentage of the chart width. All three layers share
  * the same coordinate frame: the chart is the "stage" and the labels
@@ -143,7 +144,9 @@
 .chart {
   display: block;
   width: 100%;
-  height: 100%;
+  /* Reserve the bottom 11px for the x-axis labels so they don't collide
+   * with the baseline of the bars. */
+  height: calc(100% - 11px);
 }
 
 .bar {
