@@ -1,0 +1,471 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>DeepSeek peak/off-peak · live</title>
+<style>
+  :root {
+    --bg: #0f1115;
+    --card: #161a22;
+    --card-2: #1c2230;
+    --text: #e6e8ee;
+    --muted: #8b93a5;
+    --line: #262c3a;
+    --off: #19c37d;        /* green */
+    --off-2: #0e8a5a;
+    --peak: #ef4444;       /* red */
+    --peak-2: #b91c1c;
+    --amber: #f5a524;
+    --shadow: 0 8px 24px rgba(0,0,0,.35);
+    --radius: 14px;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    color: var(--text);
+    background: radial-gradient(1200px 600px at 20% 0%, #1a2030 0%, #0f1115 60%);
+    min-height: 100vh;
+    display: grid;
+    place-items: center;
+    padding: 24px;
+  }
+
+  .ds-peak {
+    width: 340px;
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+    overflow: hidden;
+  }
+
+  .ds-head {
+    padding: 14px 16px 12px;
+    color: #fff;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    transition: background .35s ease;
+  }
+  .ds-head.off  { background: linear-gradient(135deg, var(--off) 0%, var(--off-2) 100%); }
+  .ds-head.peak { background: linear-gradient(135deg, var(--peak) 0%, var(--peak-2) 100%); }
+  .ds-head.flat { background: linear-gradient(135deg, #3a4153 0%, #232838 100%); }
+
+  .ds-head .label {
+    font-size: 18px;
+    font-weight: 700;
+    letter-spacing: .04em;
+  }
+  .ds-head .badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    font-weight: 600;
+    padding: 3px 8px;
+    border-radius: 999px;
+    background: rgba(255,255,255,.18);
+    backdrop-filter: blur(4px);
+  }
+  .ds-head .badge::before {
+    content: "";
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: #fff;
+    box-shadow: 0 0 8px rgba(255,255,255,.7);
+    animation: pulse 1.6s ease-in-out infinite;
+  }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.35} }
+
+  .ds-sub {
+    padding: 0 16px;
+    color: var(--muted);
+    font-size: 12px;
+    margin-top: 10px;
+    margin-bottom: 4px;
+  }
+
+  .ds-countdown {
+    padding: 12px 16px 8px;
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+  }
+  .ds-countdown .lab {
+    color: var(--muted);
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: .08em;
+  }
+  .ds-countdown .val {
+    font-variant-numeric: tabular-nums;
+    font-weight: 600;
+    font-size: 18px;
+  }
+  .ds-countdown .arrow {
+    color: var(--muted);
+    margin: 0 6px;
+  }
+  .ds-countdown .next {
+    font-size: 12px;
+    color: var(--muted);
+    text-align: right;
+  }
+  .ds-countdown .next b { color: var(--text); font-weight: 600; }
+
+  .ds-timeline {
+    position: relative;
+    margin: 6px 16px 12px;
+    height: 28px;
+    background: var(--card-2);
+    border-radius: 6px;
+    overflow: hidden;
+    border: 1px solid var(--line);
+  }
+  .ds-timeline .peak-band {
+    position: absolute;
+    top: 0; bottom: 0;
+    background: linear-gradient(180deg, rgba(239,68,68,.55), rgba(239,68,68,.35));
+    border-left: 1px solid rgba(239,68,68,.7);
+    border-right: 1px solid rgba(239,68,68,.7);
+  }
+  .ds-timeline .ticks {
+    position: absolute; inset: 0;
+    display: flex;
+    justify-content: space-between;
+    color: rgba(255,255,255,.35);
+    font-size: 9px;
+    padding: 0 4px;
+    align-items: flex-end;
+    pointer-events: none;
+  }
+  .ds-timeline .now {
+    position: absolute;
+    top: -2px; bottom: -2px;
+    width: 2px;
+    background: #fff;
+    box-shadow: 0 0 6px #fff;
+    transition: left .35s linear;
+  }
+  .ds-timeline .now::after {
+    content: "";
+    position: absolute;
+    top: -4px; left: -3px;
+    width: 8px; height: 8px;
+    background: #fff;
+    border-radius: 50%;
+  }
+
+  .ds-rates {
+    padding: 8px 16px 14px;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+  }
+  .ds-rate {
+    background: var(--card-2);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 8px 10px;
+  }
+  .ds-rate .model {
+    font-size: 11px;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: .06em;
+  }
+  .ds-rate .row {
+    display: flex;
+    justify-content: space-between;
+    margin-top: 4px;
+    font-size: 12px;
+    color: var(--text);
+    font-variant-numeric: tabular-nums;
+  }
+  .ds-rate .row b { font-weight: 600; }
+
+  .ds-foot {
+    padding: 10px 16px 12px;
+    border-top: 1px solid var(--line);
+    color: var(--muted);
+    font-size: 11px;
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+  }
+  .ds-foot .src a {
+    color: var(--muted);
+    text-decoration: underline;
+    text-decoration-color: rgba(139,147,165,.3);
+  }
+  .ds-foot .src a:hover { color: var(--text); }
+  .ds-foot .times {
+    font-variant-numeric: tabular-nums;
+    text-align: right;
+  }
+
+  /* Tabs / model selector */
+  .ds-tabs {
+    display: flex;
+    gap: 4px;
+    padding: 8px 16px 0;
+  }
+  .ds-tabs button {
+    background: transparent;
+    border: 1px solid var(--line);
+    color: var(--muted);
+    font: inherit;
+    font-size: 11px;
+    padding: 4px 10px;
+    border-radius: 999px;
+    cursor: pointer;
+  }
+  .ds-tabs button.active {
+    color: var(--text);
+    border-color: rgba(255,255,255,.2);
+    background: rgba(255,255,255,.05);
+  }
+
+  .pre-launch .ds-head { filter: saturate(.7); }
+  .pre-launch .ds-foot { color: var(--amber); }
+</style>
+</head>
+<body>
+  <div class="ds-peak" id="root" role="status" aria-live="polite">
+    <div class="ds-head" id="head">
+      <div class="label" id="label">…</div>
+      <div class="badge" id="badge">live</div>
+    </div>
+
+    <div class="ds-sub" id="sub"></div>
+
+    <div class="ds-countdown" id="countdown">
+      <div>
+        <div class="lab">Next phase in</div>
+        <div class="val" id="cdVal">--:--</div>
+      </div>
+      <div class="next" id="cdNext">—</div>
+    </div>
+
+    <div class="ds-timeline" id="timeline" title="24h UTC timeline (red = peak)">
+      <div class="ticks">
+        <span>00</span><span>06</span><span>12</span><span>18</span><span>24</span>
+      </div>
+      <div class="now" id="now" style="left:0%"></div>
+    </div>
+
+    <div class="ds-tabs">
+      <button data-model="v4-flash" class="active">v4-flash</button>
+      <button data-model="v4-pro">v4-pro</button>
+    </div>
+
+    <div class="ds-rates" id="rates"></div>
+
+    <div class="ds-foot">
+      <div class="times" id="times">—</div>
+      <div class="src">
+        <a href="https://api-docs.deepseek.com/quick_start/pricing/" target="_blank" rel="noopener">deepseek pricing ↗</a>
+      </div>
+    </div>
+  </div>
+
+<script>
+(() => {
+  "use strict";
+
+  // --- DeepSeek API schedule (authoritative source: api-docs.deepseek.com/quick_start/pricing) ---
+  // Peak hours (UTC): 01:00-04:00 and 06:00-10:00. All other hours are off-peak.
+  // Effective: 2026-08-16 16:00 UTC. Before that moment, flat pricing is in effect.
+  const PEAK_WINDOWS_UTC = [
+    { startH: 1,  endH: 4  }, // morning Beijing peak (09:00-12:00 CST)
+    { startH: 6,  endH: 10 }, // afternoon Beijing peak (14:00-18:00 CST)
+  ];
+  const CUTOVER_UTC = Date.UTC(2026, 7, 16, 16, 0, 0); // Aug 16, 2026 16:00 UTC
+  const HOUR_MS = 3600 * 1000;
+
+  // Prices in USD per 1M tokens.
+  const RATES = {
+    flat: {
+      "v4-flash": { inHit: 0.0028, inMiss: 0.14,  out: 0.28  },
+      "v4-pro":   { inHit: 0.003625, inMiss: 0.435, out: 0.87 },
+    },
+    off: {
+      "v4-flash": { inHit: 0.007,  inMiss: 0.22,  out: 0.66  },
+      "v4-pro":   { inHit: 0.022,  inMiss: 0.66,  out: 1.98  },
+    },
+    peak: {
+      "v4-flash": { inHit: 0.014,  inMiss: 0.44,  out: 1.32  },
+      "v4-pro":   { inHit: 0.044,  inMiss: 1.32,  out: 3.96  },
+    },
+  };
+
+  // --- DOM refs ---
+  const $ = (id) => document.getElementById(id);
+  const root = $("root");
+  const head = $("head");
+  const label = $("label");
+  const badge = $("badge");
+  const sub = $("sub");
+  const cdVal = $("cdVal");
+  const cdNext = $("cdNext");
+  const timeline = $("timeline");
+  const now = $("now");
+  const rates = $("rates");
+  const times = $("times");
+  const tabs = document.querySelectorAll(".ds-tabs button");
+
+  let model = "v4-flash";
+
+  // --- Phase computation ---
+  // Returns { phase, preLaunch, nextBoundaryUtc (Date), nextLabel, minutesToNext }
+  function currentPhase(nowUtc) {
+    if (nowUtc.getTime() < CUTOVER_UTC) {
+      // Flat pricing window.
+      return {
+        phase: "flat",
+        preLaunch: true,
+        nextBoundaryUtc: new Date(CUTOVER_UTC),
+        nextLabel: "peak/off-peak begins",
+        minutesToNext: Math.max(0, Math.floor((CUTOVER_UTC - nowUtc.getTime()) / 60000)),
+      };
+    }
+    const h = nowUtc.getUTCHours() + nowUtc.getUTCMinutes() / 60;
+    let inPeak = false;
+    for (const w of PEAK_WINDOWS_UTC) {
+      if (h >= w.startH && h < w.endH) { inPeak = true; break; }
+    }
+    // Compute next boundary
+    const startOfDay = Date.UTC(
+      nowUtc.getUTCFullYear(), nowUtc.getUTCMonth(), nowUtc.getUTCDate(), 0, 0, 0
+    );
+    // Build today's boundaries, then tomorrow's if needed.
+    const boundaries = [];
+    for (const w of PEAK_WINDOWS_UTC) {
+      boundaries.push({ t: startOfDay + w.startH * HOUR_MS, phase: "peak" });
+      boundaries.push({ t: startOfDay + w.endH   * HOUR_MS, phase: "off"  });
+    }
+    const t0 = nowUtc.getTime();
+    // Find next boundary strictly after t0; if none today, fall through to tomorrow.
+    let next = boundaries.find(b => b.t > t0);
+    if (!next) {
+      const tomorrow = startOfDay + 24 * HOUR_MS;
+      next = { t: tomorrow + PEAK_WINDOWS_UTC[0].startH * HOUR_MS, phase: "peak" };
+    }
+    return {
+      phase: inPeak ? "peak" : "off",
+      preLaunch: false,
+      nextBoundaryUtc: new Date(next.t),
+      nextLabel: next.phase === "peak" ? "PEAK" : "OFF-PEAK",
+      minutesToNext: Math.max(0, Math.floor((next.t - t0) / 60000)),
+    };
+  }
+
+  // --- Renderers ---
+  function renderHead(state) {
+    head.classList.remove("off", "peak", "flat");
+    badge.textContent = state.preLaunch ? "preview" : "live";
+    if (state.phase === "off")  { head.classList.add("off");  label.textContent = "OFF-PEAK"; }
+    if (state.phase === "peak") { head.classList.add("peak"); label.textContent = "PEAK"; }
+    if (state.phase === "flat") { head.classList.add("flat"); label.textContent = "FLAT"; }
+    sub.textContent = state.phase === "flat"
+      ? "Pre-cutover flat pricing. Peak/off-peak begins 2026-08-16 16:00 UTC."
+      : (state.phase === "peak"
+          ? "Peak surcharge · 2× off-peak baseline on all V4 models"
+          : "Off-peak · half the peak rate on all V4 models");
+  }
+
+  function renderCountdown(state) {
+    const m = state.minutesToNext;
+    const hh = Math.floor(m / 60);
+    const mm = m % 60;
+    cdVal.textContent = `${String(hh).padStart(2, "0")}h ${String(mm).padStart(2, "0")}m`;
+    const t = state.nextBoundaryUtc;
+    const localHHMM = t.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false });
+    cdNext.innerHTML = `→ <b>${state.nextLabel}</b> at ${localHHMM} (${tzAbbrev()})`;
+  }
+
+  function tzAbbrev() {
+    try {
+      const fmt = new Intl.DateTimeFormat(undefined, { timeZoneName: "short" });
+      const parts = fmt.formatToParts(new Date());
+      const tz = parts.find(p => p.type === "timeZoneName");
+      return tz ? tz.value : "local";
+    } catch { return "local"; }
+  }
+
+  function renderTimeline() {
+    // Remove old peak bands.
+    timeline.querySelectorAll(".peak-band").forEach(n => n.remove());
+    const nowUtc = new Date();
+    for (const w of PEAK_WINDOWS_UTC) {
+      // If we're past 10:00 UTC, only render the *next day's* 01-04 and 06-10 to show
+      // the upcoming 24h preview more usefully. Keep both for transparency.
+      const left = (w.startH / 24) * 100;
+      const width = ((w.endH - w.startH) / 24) * 100;
+      const band = document.createElement("div");
+      band.className = "peak-band";
+      band.style.left = left + "%";
+      band.style.width = width + "%";
+      band.title = `Peak ${String(w.startH).padStart(2,"0")}:00–${String(w.endH).padStart(2,"0")}:00 UTC`;
+      timeline.appendChild(band);
+    }
+    const h = nowUtc.getUTCHours() + nowUtc.getUTCMinutes() / 60 + nowUtc.getUTCSeconds() / 3600;
+    now.style.left = ((h / 24) * 100) + "%";
+  }
+
+  function renderRates() {
+    const state = currentPhase(new Date());
+    const table = RATES[state.phase === "flat" ? "flat" : state.phase][model];
+    const inMiss = `$${table.inMiss.toFixed(table.inMiss < 0.01 ? 4 : 2)}/M in`;
+    const inHit  = `$${table.inHit.toFixed(4)}/M in · cache hit`;
+    const out    = `$${table.out.toFixed(2)}/M out`;
+    rates.innerHTML = `
+      <div class="ds-rate">
+        <div class="model">${model} · cache miss</div>
+        <div class="row"><span>input</span><b>${inMiss.replace("/M in","")}</b></div>
+        <div class="row"><span>output</span><b>${out.replace("/M out","")}</b></div>
+      </div>
+      <div class="ds-rate">
+        <div class="model">${model} · cache hit</div>
+        <div class="row"><span>input</span><b>${inHit.replace("/M in · cache hit","")}</b></div>
+        <div class="row"><span>vs miss</span><b>${(table.inMiss / table.inHit).toFixed(0)}× cheaper</b></div>
+      </div>
+    `;
+  }
+
+  function renderTimes() {
+    const t = new Date();
+    const local = t.toLocaleString([], { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false });
+    const utc   = t.toISOString().slice(11, 19);
+    times.innerHTML = `local <b>${local}</b><br/>UTC <b>${utc}</b>`;
+  }
+
+  // --- Wire up ---
+  function tick() {
+    const state = currentPhase(new Date());
+    renderHead(state);
+    renderCountdown(state);
+    renderTimeline();
+    renderRates();
+    renderTimes();
+    root.classList.toggle("pre-launch", state.preLaunch);
+  }
+
+  tabs.forEach(b => b.addEventListener("click", () => {
+    tabs.forEach(x => x.classList.remove("active"));
+    b.classList.add("active");
+    model = b.dataset.model;
+    renderRates();
+  }));
+
+  // First paint immediately, then every second.
+  tick();
+  setInterval(tick, 1000);
+})();
+</script>
+</body>
+</html>

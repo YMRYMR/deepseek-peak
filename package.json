@@ -1,0 +1,13 @@
+{
+  "name": "deepseek-peak",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A small live widget that shows whether DeepSeek's V4 API is in peak (2x) or off-peak pricing, with a countdown to the next phase. Open the URL in a browser tab and pin it.",
+  "scripts": {
+    "start": "node serve.js",
+    "start:no-open": "node serve.js --no-open"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

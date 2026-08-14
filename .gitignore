@@ -1,0 +1,25 @@
+# Build / runtime logs (these are scratch, not part of the source)
+clone.log
+clone.log.err
+pnpm-install.log
+harness.log
+harness.err
+*.log
+*.log.err
+
+# Node
+node_modules/
+
+# OS junk
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editor junk
+.vscode/
+.idea/
+*.swp
+*~
+
+# Local-only harness clone (if anyone drops a harness checkout in here)
+deepseek-harness/

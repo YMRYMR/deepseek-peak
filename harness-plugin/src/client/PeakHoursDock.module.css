@@ -1,0 +1,102 @@
+.dock {
+  display: block;
+  width: 100%;
+  padding: 0 12px;
+  margin: 0 0 6px;
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+}
+
+.bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--dsw-color-border-subtle, rgba(127, 127, 127, 0.18));
+  background: var(--dsw-color-bg-elevated, rgba(127, 127, 127, 0.06));
+  color: var(--dsw-color-fg-default, currentColor);
+  transition: background 200ms ease, border-color 200ms ease;
+  min-height: 28px;
+}
+
+.dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+  flex: 0 0 auto;
+  opacity: 0.7;
+  box-shadow: 0 0 6px currentColor;
+}
+
+.label {
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  flex: 0 0 auto;
+}
+
+.subtitle {
+  font-weight: 400;
+  opacity: 0.75;
+  flex: 0 0 auto;
+}
+
+.spacer {
+  flex: 1 1 auto;
+}
+
+.countdownLabel {
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 10px;
+  opacity: 0.65;
+  flex: 0 0 auto;
+}
+
+.countdownValue {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  flex: 0 0 auto;
+}
+
+.countdownTarget {
+  opacity: 0.65;
+  flex: 0 0 auto;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Phase colors. CSS-variable fallbacks keep the card readable in any
+ * theme; harness tokens override when available. */
+.off .bar {
+  background: color-mix(in srgb, var(--dsw-color-success, #19c37d) 16%, transparent);
+  border-color: color-mix(in srgb, var(--dsw-color-success, #19c37d) 50%, transparent);
+  color: var(--dsw-color-success, #19c37d);
+}
+
+.peak .bar {
+  background: color-mix(in srgb, var(--dsw-color-danger, #ef4444) 16%, transparent);
+  border-color: color-mix(in srgb, var(--dsw-color-danger, #ef4444) 50%, transparent);
+  color: var(--dsw-color-danger, #ef4444);
+}
+
+/* Pre-cutover: the schedule is already in force but the actual billing is
+ * still flat until 2026-08-16 16:00 UTC. Show the schedule's band as the
+ * primary signal (green or red) and mark the dashed border + small badge so
+ * the user knows live billing hasn't kicked in yet. */
+.preLaunch .bar {
+  border-style: dashed;
+}
+
+.badge {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  padding: 1px 6px;
+  border-radius: 999px;
+  border: 1px solid currentColor;
+  opacity: 0.7;
+  flex: 0 0 auto;
+}

@@ -1,0 +1,16 @@
+{
+  "extends": "../../../tsconfig.base.client.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "lib/types"
+  },
+  "include": [
+    "src"
+  ],
+  "references": [
+    { "path": "../../../vendor/cordis" },
+    { "path": "../runtime" },
+    { "path": "../ui-conversation" },
+    { "path": "../../runtime-diagnostics/invariants" }
+  ]
+}

@@ -1,0 +1,96 @@
+/* Compact status pill: dot + label + countdown in a single line. Designed
+ * for the right-aligned utilities row of the session header, where screen
+ * real estate is at a premium. */
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  border: 1px solid currentColor;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.2;
+  letter-spacing: 0.02em;
+  cursor: default;
+  user-select: none;
+  /* The pill is part of the utility row; let it shrink before it pushes
+   * other utilities off-screen. The countdown text below is the part that
+   * truncates first. */
+  min-width: 0;
+  max-width: 100%;
+  transition: background 200ms ease, border-color 200ms ease, color 200ms ease;
+}
+
+.dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  flex: 0 0 auto;
+  box-shadow: 0 0 6px currentColor;
+}
+
+.label {
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  flex: 0 0 auto;
+}
+
+.badge {
+  font-size: 9px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  padding: 0 5px;
+  border-radius: 999px;
+  border: 1px solid currentColor;
+  opacity: 0.7;
+  flex: 0 0 auto;
+}
+
+.countdown {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  /* Inherit color from the pill; keep the count visible at every width. */
+  flex: 1 1 auto;
+  min-width: 0;
+  text-align: right;
+  opacity: 0.85;
+}
+
+.arrow {
+  opacity: 0.45;
+  flex: 0 0 auto;
+}
+
+.target {
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 0 0 auto;
+  opacity: 0.8;
+}
+
+/* Off-peak: green. The color cascade is via currentColor on the pill so
+ * children (dot, label, badge) inherit. */
+.off {
+  color: var(--dsw-color-success, #19c37d);
+  background: color-mix(in srgb, var(--dsw-color-success, #19c37d) 12%, transparent);
+}
+
+.peak {
+  color: var(--dsw-color-danger, #ef4444);
+  background: color-mix(in srgb, var(--dsw-color-danger, #ef4444) 12%, transparent);
+}
+
+/* Pre-cutover: dashed border, no background tint change — the schedule's
+ * band (green/red) stays the primary signal. */
+.preLaunch {
+  border-style: dashed;
+}
