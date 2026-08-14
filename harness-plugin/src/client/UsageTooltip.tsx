@@ -180,10 +180,9 @@ function BalanceLine({
     return (
       <div className={css.titleLine}>
         <span className={css.titleLabel}>Balance</span>
-        <span className={css.titleNum} data-tone="warn">—</span>
         <span className={css.errorHint} title={balanceError.message}>
           {balanceError.kind === 'no-key' || !hasApiKey
-            ? 'set key'
+            ? 'set key for live balance'
             : 'fetch failed'}
         </span>
         <button type="button" className={css.refreshBtn} onClick={onOpenSettings}
@@ -195,7 +194,6 @@ function BalanceLine({
   return (
     <div className={css.titleLine}>
       <span className={css.titleLabel}>Balance</span>
-      <span className={css.titleNum} data-tone="muted">—</span>
       <span className={css.errorHint}>{hasApiKey ? 'loading…' : 'set key for live balance'}</span>
       <button type="button" className={css.refreshBtn} onClick={onOpenSettings}
         aria-label="Configure API key">⚙</button>
@@ -304,7 +302,10 @@ function ModelCard({ model, days, rangeStartMs }: ModelCardProps) {
             const h = Math.max(0, CHART_H - yAt(value))
             const y = CHART_H - h
             if (h === 0) {
-              return <rect key={i} x={x} y={CHART_H - 1} width={BAR_PX} height={1} className={css.barFloor} />
+              // Empty-day floor: a 2px sliver so zero days are still visible
+              // as a baseline mark, not invisible. Matches the platform's
+              // chart look where every day is represented.
+              return <rect key={i} x={x} y={CHART_H - 2} width={BAR_PX} height={2} className={css.barFloor} />
             }
             return (
               <rect key={i} x={x} y={y} width={BAR_PX} height={h} className={css.bar} />
