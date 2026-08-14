@@ -487,7 +487,7 @@ export function apply(ctx: Context): void {
   let updateCurrent: ((patch: object) => Promise<void>) | null = null
   ctx.inject(['settings'], (sctx) => {
     const scope = sctx.settings.register(STATE_NS, Config, { base: initialConfig })
-    updateCurrent = (patch) => scope.update(patch)
+    updateCurrent = patch => scope.update(patch)
     // Pull the persisted value (or the default) at attach.
     const v = scope.get()
     isPaused = v.paused

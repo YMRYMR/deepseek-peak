@@ -1,7 +1,7 @@
 /**
- * PeakHoursHost: owns the hover state and the local usage aggregation.
- * Mounts the unchanged `<PeakHoursPill />` next to a hover-revealed
- * `<UsageTooltip />`.
+ * PeakHoursHost: owns the hover state, the local usage aggregation, and
+ * the balance fetch. Mounts the unchanged `<PeakHoursPill />` next to a
+ * hover-revealed `<UsageTooltip />`.
  *
  * The pill itself is untouched; this component is purely a host that
  * adds the overlay. The tooltip stays open while the mouse is over
@@ -12,13 +12,18 @@
  * and passes them to the tooltip so the card's color and border style
  * track the pill's band. The pill keeps its own 1 Hz ticker; the host
  * ticks only while the tooltip is open.
+ *
+ * The balance is fetched through the host's `/api/peak-hours/balance`
+ * route, which resolves the DeepSeek API key server-side. The browser
+ * never holds the key; the host returns the JSON envelope directly.
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { PeakHoursPill } from './PeakHoursPill.tsx'
 import { UsageTooltip } from './UsageTooltip.tsx'
-import { aggregateUsage, type UsageSummary } from './usage.ts'
+import type { UsageSummary } from './usage.ts'
 import { currentPhase, type Phase } from './domain.ts'
+import { BalanceCache, fetchBalance, type BalanceResult } from './balance.ts'
 import css from './PeakHoursHost.module.css'
 
 const RANGE_DAYS = 30
@@ -44,9 +49,16 @@ export function PeakHoursHost(props: PeakHoursHostProps) {
   // the phase boundary, not within the same band.
   const [phase, setPhase] = useState<Phase>(() => currentPhase(new Date()).phase)
   const [preLaunch, setPreLaunch] = useState<boolean>(() => currentPhase(new Date()).preLaunch)
+  // Balance state for the host-routed fetch. The cache lives in a ref so
+  // hovers don't lose it; the state is the last-resolved value, used by
+  // the tooltip's balance row.
+  const balanceCacheRef = useRef<BalanceCache>(new BalanceCache())
+  const [balance, setBalance] = useState<BalanceResult | null>(() => balanceCacheRef.current.value)
+  const [balanceLoading, setBalanceLoading] = useState(false)
 
   // Guard against double-fetch on rapid hover-in/out.
   const summaryInflightRef = useRef(false)
+  const balanceInflightRef = useRef(false)
 
   const recomputeSummary = useCallback(() => {
     if (summaryInflightRef.current) return
@@ -65,11 +77,33 @@ export function PeakHoursHost(props: PeakHoursHostProps) {
     })
   }, [aggregate])
 
-  // Lazy fetch: on first hover, compute summary.
+  const refreshBalance = useCallback(async () => {
+    if (balanceInflightRef.current) return
+    // Cache hit: surface the cached value immediately, no network.
+    const cache = balanceCacheRef.current
+    if (cache.valid) {
+      const cached = cache.value
+      if (cached !== null) setBalance(cached)
+      return
+    }
+    balanceInflightRef.current = true
+    setBalanceLoading(true)
+    try {
+      const result = await fetchBalance()
+      cache.set(result)
+      setBalance(result)
+    } finally {
+      balanceInflightRef.current = false
+      setBalanceLoading(false)
+    }
+  }, [])
+
+  // Lazy fetch: on first hover, compute summary + balance.
   const onEnter = useCallback(() => {
     setHovered(true)
     if (summary === null && !summaryLoading) recomputeSummary()
-  }, [summary, summaryLoading, recomputeSummary])
+    if (!balanceLoading) void refreshBalance()
+  }, [summary, summaryLoading, recomputeSummary, refreshBalance, balanceLoading])
 
   const onLeave = useCallback(() => setHovered(false), [])
 
@@ -115,6 +149,8 @@ export function PeakHoursHost(props: PeakHoursHostProps) {
           isLoading={summaryLoading}
           phase={phase}
           preLaunch={preLaunch}
+          balance={balance}
+          balanceLoading={balanceLoading}
         />
       )}
     </span>

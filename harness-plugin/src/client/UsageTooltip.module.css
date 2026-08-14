@@ -19,12 +19,19 @@
   left: auto;
   width: 100%;
   box-sizing: border-box;
-  /* Tinted surface that follows the pill's hue. */
-  background: color-mix(in srgb, currentColor 7%, var(--dsw-color-bg-elevated, #1a1f29));
+  /* Match the pill's 12% band-tint visually: the pill's effective RGB is
+   * `12% currentColor + 88% pill_base`. Sampling the pill area gives
+   * #142822 (off-peak) and the equivalent reddish dark on peak, so
+   * `pill_base ≈ #131316`. The card is opaque (no `transparent`) so
+   * chat text underneath the card is blocked, while the visible color
+   * matches the pill's RGB by construction. The fallback covers
+   * light-theme builds where the derived gray is wrong — the user
+   * picks the right tint there manually. */
+  background: color-mix(in srgb, currentColor 12%, #131316);
   color: inherit;
   border: 1px solid currentColor;
   border-radius: 10px;
-  padding: 8px 10px 7px;
+  padding: 7px 10px 6px;
   font-size: 11px;
   line-height: 1.35;
   box-shadow: 0 6px 20px rgba(0, 0, 0, 0.25);
@@ -43,13 +50,13 @@
 /* Off-peak: green, matching the pill's `.off` rule. */
 .cardOff {
   color: var(--dsw-color-success, #19c37d);
-  background: color-mix(in srgb, var(--dsw-color-success, #19c37d) 7%, var(--dsw-color-bg-elevated, #1a1f29));
+  background: color-mix(in srgb, var(--dsw-color-success, #19c37d) 12%, #131316);
 }
 
 /* Peak: red, matching the pill's `.peak` rule. */
 .cardPeak {
   color: var(--dsw-color-danger, #ef4444);
-  background: color-mix(in srgb, var(--dsw-color-danger, #ef4444) 7%, var(--dsw-color-bg-elevated, #1a1f29));
+  background: color-mix(in srgb, var(--dsw-color-danger, #ef4444) 12%, #131316);
 }
 
 /* Pre-cutover: dashed border, same as the pill's `.preLaunch` rule. */
@@ -60,10 +67,69 @@
 .header {
   display: flex;
   flex-direction: column;
-  gap: 1px;
+  gap: 0;
   padding-bottom: 4px;
+  margin-bottom: 4px;
   border-bottom: 1px solid color-mix(in srgb, currentColor 25%, transparent);
   pointer-events: none;
+}
+
+/* Balance row: a single horizontal strip above the spent-line subtitle.
+ * Two visual states surface from the host's JSON envelope:
+ *   data-state="ready"   green/red text on a soft tint, "USD" suffix,
+ *                        granted / topped-up / phase metadata
+ *   data-state="error"   subdued "not configured" or "fetch failed",
+ *                        tooltip on the row carries the upstream message
+ *   data-state="loading" spinner + ellipsis; the row keeps a stable
+ *                        height so the chart below doesn't jump
+ * The label is monospaced-uppercase so "BALANCE" reads as a column
+ * header, matching the footer/header rhythm of the existing card. */
+.balanceRow {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  font-size: 11px;
+  line-height: 1.2;
+  color: currentColor;
+}
+
+.balanceLabel {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  opacity: 0.55;
+  font-family: var(--dsw-font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+}
+
+.balanceValue {
+  font-size: 14px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.005em;
+  color: currentColor;
+}
+
+.balanceCurrency {
+  font-size: 10px;
+  font-weight: 500;
+  opacity: 0.7;
+  letter-spacing: 0.02em;
+}
+
+.balanceError {
+  font-size: 11px;
+  font-weight: 500;
+  opacity: 0.75;
+  color: currentColor;
+  font-style: italic;
+}
+
+.balanceErrorStatus {
+  font-size: 9px;
+  opacity: 0.5;
+  font-variant-numeric: tabular-nums;
+  font-family: var(--dsw-font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
 }
 
 .subtitle {
@@ -136,7 +202,7 @@
   display: flex;
   align-items: stretch;
   width: 100%;
-  height: 50px;
+  height: 70px;
   margin-top: 2px;
   pointer-events: none;
 }
@@ -145,9 +211,9 @@
   display: block;
   flex: 1 1 0;
   min-width: 0;
-  /* Reserve the bottom 11px for the x-axis labels so they don't collide
+  /* Reserve the bottom 14px for the x-axis labels so they don't collide
    * with the baseline of the bars. */
-  height: calc(100% - 11px);
+  height: calc(100% - 14px);
   align-self: flex-start;
 }
 
@@ -169,7 +235,7 @@
   justify-content: space-between;
   align-items: flex-start;
   /* Leave room at the bottom so the y-ticks don't sit on the x-axis row. */
-  padding-bottom: 11px;
+  padding-bottom: 14px;
   pointer-events: none;
 }
 
@@ -188,7 +254,7 @@
    * chart, not the chartWrap. */
   left: 26px;
   right: 0;
-  height: 10px;
+  height: 12px;
   pointer-events: none;
 }
 
