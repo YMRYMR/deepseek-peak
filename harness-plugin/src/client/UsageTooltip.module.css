@@ -127,14 +127,14 @@
   gap: 3px;
 }
 
-/* Chart area: the SVG fills the content width and the full height
- * MINUS the bottom strip reserved for x-axis labels. The y-axis labels
- * sit on the left edge in absolute terms, the x-axis labels are
- * positioned by percentage of the chart width. All three layers share
- * the same coordinate frame: the chart is the "stage" and the labels
- * are overlays. */
+/* Chart area: a horizontal flex with the y-axis labels on the left and
+ * the SVG chart on the right. The x-axis labels are absolutely
+ * positioned in the bottom strip, spanning from after the y-axis to
+ * the right edge. */
 .chartWrap {
   position: relative;
+  display: flex;
+  align-items: stretch;
   width: 100%;
   height: 50px;
   margin-top: 2px;
@@ -143,10 +143,12 @@
 
 .chart {
   display: block;
-  width: 100%;
+  flex: 1 1 0;
+  min-width: 0;
   /* Reserve the bottom 11px for the x-axis labels so they don't collide
    * with the baseline of the bars. */
   height: calc(100% - 11px);
+  align-self: flex-start;
 }
 
 .bar {
@@ -160,15 +162,14 @@
 }
 
 .yAxis {
-  position: absolute;
-  top: 0;
-  left: 0;
-  bottom: 10px; /* leave room for the x-axis labels */
+  flex: 0 0 26px;
   width: 26px;
   display: flex;
   flex-direction: column;
   justify-content: space-between;
   align-items: flex-start;
+  /* Leave room at the bottom so the y-ticks don't sit on the x-axis row. */
+  padding-bottom: 11px;
   pointer-events: none;
 }
 
@@ -183,7 +184,9 @@
 .xAxis {
   position: absolute;
   bottom: 0;
-  left: 0;
+  /* Skip the y-axis width on the left so the x-labels align with the
+   * chart, not the chartWrap. */
+  left: 26px;
   right: 0;
   height: 10px;
   pointer-events: none;
