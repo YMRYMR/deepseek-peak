@@ -11,19 +11,22 @@
 .card {
   position: absolute;
   top: calc(100% + 2px);
-  /* Width matches the host (= pill) exactly. The card cannot be wider or
-   * narrower than the pill. */
+  /* Width matches the host (= pill) exactly. `box-sizing: border-box`
+   * is the critical line: without it, the default `content-box` would
+   * apply `width: 100%` to the content area only and then add padding +
+   * border on top, making the card ~18 px wider than the pill. */
   right: 0;
   left: auto;
   width: 100%;
+  box-sizing: border-box;
   /* Tinted surface that follows the pill's hue. */
   background: color-mix(in srgb, currentColor 7%, var(--dsw-color-bg-elevated, #1a1f29));
   color: inherit;
   border: 1px solid currentColor;
   border-radius: 10px;
-  padding: 6px 8px 5px;
-  font-size: 10px;
-  line-height: 1.3;
+  padding: 8px 10px 7px;
+  font-size: 11px;
+  line-height: 1.35;
   box-shadow: 0 6px 20px rgba(0, 0, 0, 0.25);
   z-index: 1000;
   /* Receive pointer events on the interactive regions. The non-interactive
@@ -66,8 +69,8 @@
 .subtitle {
   display: flex;
   align-items: center;
-  gap: 4px;
-  font-size: 10px;
+  gap: 5px;
+  font-size: 11px;
   opacity: 0.75;
 }
 
@@ -89,15 +92,15 @@
 .models {
   display: flex;
   flex-direction: column;
-  gap: 5px;
-  padding: 5px 0 2px;
+  gap: 7px;
+  padding: 7px 0 3px;
   pointer-events: none;
 }
 
 .model {
   display: flex;
   flex-direction: column;
-  gap: 1px;
+  gap: 2px;
 }
 
 .modelHeader {
@@ -108,7 +111,7 @@
 }
 
 .modelName {
-  font-size: 9px;
+  font-size: 10px;
   font-weight: 600;
   letter-spacing: 0.02em;
   color: currentColor;
@@ -116,8 +119,8 @@
 }
 
 .modelMeta {
-  font-size: 9px;
-  opacity: 0.65;
+  font-size: 10px;
+  opacity: 0.7;
   font-variant-numeric: tabular-nums;
   display: inline-flex;
   align-items: baseline;
@@ -132,8 +135,8 @@
 .chartWrap {
   position: relative;
   width: 100%;
-  height: 36px;
-  margin-top: 1px;
+  height: 50px;
+  margin-top: 2px;
   pointer-events: none;
 }
 
@@ -157,8 +160,8 @@
   position: absolute;
   top: 0;
   left: 0;
-  bottom: 8px; /* leave room for the x-axis labels */
-  width: 24px;
+  bottom: 10px; /* leave room for the x-axis labels */
+  width: 26px;
   display: flex;
   flex-direction: column;
   justify-content: space-between;
@@ -167,9 +170,9 @@
 }
 
 .yTick {
-  font-size: 7px;
+  font-size: 8px;
   color: currentColor;
-  opacity: 0.5;
+  opacity: 0.55;
   font-variant-numeric: tabular-nums;
   line-height: 1;
 }
@@ -179,7 +182,7 @@
   bottom: 0;
   left: 0;
   right: 0;
-  height: 8px;
+  height: 10px;
   pointer-events: none;
 }
 
@@ -187,9 +190,9 @@
   position: absolute;
   top: 0;
   transform: translateX(-50%);
-  font-size: 7px;
+  font-size: 8px;
   color: currentColor;
-  opacity: 0.55;
+  opacity: 0.6;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
   line-height: 1;
@@ -198,18 +201,18 @@
 .footer {
   display: flex;
   align-items: center;
-  gap: 4px;
-  padding-top: 4px;
-  margin-top: 2px;
+  gap: 5px;
+  padding-top: 5px;
+  margin-top: 3px;
   border-top: 1px solid color-mix(in srgb, currentColor 18%, transparent);
-  font-size: 8px;
-  opacity: 0.6;
+  font-size: 9px;
+  opacity: 0.65;
   pointer-events: none;
 }
 
 .placeholder {
   display: inline-block;
-  font-size: 10px;
+  font-size: 11px;
   opacity: 0.7;
 }
 
