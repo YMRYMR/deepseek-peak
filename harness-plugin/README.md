@@ -13,8 +13,8 @@ The pill is computed from the browser clock against the authoritative
 UTC windows published at
 [`api-docs.deepseek.com/quick_start/pricing/`](https://api-docs.deepseek.com/quick_start/pricing/).
 The on-hover overlay pulls per-message token counts from each session's
-trajectory view and fetches the live balance from
-`GET /user/balance` (no host round-trip needed for the pill itself).
+trajectory view. The live balance is fetched server-side by the host
+face; the browser never holds the API key.
 
 ## What you see
 
@@ -25,7 +25,7 @@ trajectory view and fetches the live balance from
 │         └─ on hover, anchored below the pill:              │
 │                                                            │
 │  ┌──────────────────────────────────────────────────────┐  │
-│  │  BALANCE  $2.18 USD                       ↻          │  │
+│  │  BALANCE  $2.18 USD          granted $5.00 · peak   │  │
 │  │  Spent ≈ $0.74 · 1,204 messages here                │  │
 │  │  ────────────────────────────────────────────────    │  │
 │  │  v4-flash                          1.2B  ·  $0.62   │  │
@@ -61,16 +61,74 @@ code path (`pricing.ts`).
 
 ## Balance fetch
 
-The balance line in the header is `GET https://api.deepseek.com/user/balance`
-with the user's API key as `Authorization: Bearer <key>`. The key is
-stored in `localStorage` only — never logged, never sent anywhere else.
+The balance line in the header is `GET /api/peak-hours/balance`, served
+by this package's **host face** (`src/index.ts`). The browser never
+sees the DeepSeek API key. The wire is:
 
-The fetch happens in the browser. If `api.deepseek.com` does not return
-the right CORS headers for the harness origin, the request fails and the
-header degrades to a `—` with a "fetch failed" hint. The chart below
-still works because it is local data.
+```
+Browser                          Host (this package's src/index.ts)
+───────                          ─────────────────────────────────
+hover the pill
+  → fetch('/api/peak-hours/balance')
+    ── HTTP GET (same-origin) ──►
+                                  ctx.credentials.resolve('DEEPSEEK_API_KEY')
+                                    ↳ inherited env (DEEPSEEK_API_KEY=… dsh)
+                                    ↳ $DSH_HOME/.credentials.yaml
+                                      (the Models settings page writes here)
+                                    ↳ <cwd>/.env → $DSH_HOME/.env fallback
+                                  fetch('https://api.deepseek.com/user/balance')
+                                    ↳ bearer-auth GET, server-to-server, no CORS
+                                  cache (5 min) → JSON response
+    ◄── JSON ──
+  → render
+```
 
-To enter the key, hover the pill → click the ⚙ icon → paste the key → Save.
+The user does not type the key into the browser. They configure it
+once, the same way they configure every other DeepSeek call in the
+harness — through the Models settings page, or by exporting
+`DEEPSEEK_API_KEY` in the launching shell, or by writing
+`.credentials.yaml`. The key never leaves the harness process; the
+browser only ever sees a small JSON envelope with the balance total.
+
+If `DEEPSEEK_API_KEY` is not configured, the balance row degrades to
+`BALANCE — not configured` (with a tooltip explaining the cause) and
+the rest of the surface keeps working. There is no settings form in
+the browser to enter the key — by design, so a typo can never leak a
+key the user did not intend to share with the page.
+
+### Caching
+
+Both halves cache the balance for 5 minutes:
+
+- **Host**: a single in-memory slot, refreshed by a `setTimeout(5 min)`
+  loop on every successful fetch. The first hover after a cold boot is
+  not a 5-minute wait; the host kicks a refresh on demand and the
+  browser sees the fresh result on the response.
+- **Browser**: a `BalanceCache` in the `PeakHoursHost` closure, valid
+  for 5 minutes. A hover storm in the same 5-min window costs at most
+  one network round-trip per browser tab.
+
+### Error envelope
+
+The host always answers `200 OK` with a JSON envelope, even on failure,
+so the browser can always parse the body as a `BalanceResult`:
+
+```ts
+type BalanceResult =
+  | { ok: true;  balance: { entries: [...], isAvailable: boolean, refreshedAt: number } }
+  | { ok: false; error: { kind: 'no-key' | 'network' | 'http' | 'parse' | 'unavailable',
+                          status?: number, message: string } }
+```
+
+The browser's tooltip row maps these to a small set of stable strings:
+
+| kind          | Row text           | Tooltip carries |
+| ------------- | ------------------ | --------------- |
+| `no-key`        | `not configured`     | `"DEEPSEEK_API_KEY is not configured on the host"` |
+| `network`       | `fetch failed`       | the fetch error message |
+| `http`          | `fetch failed`       | `"HTTP <status> <statusText>"` |
+| `parse`         | `fetch failed`       | the JSON parse error message |
+| `unavailable`   | `fetch failed`       | `"platform reports balance unavailable"` |
 
 ## Install
 
@@ -84,13 +142,23 @@ pnpm dsh web
 ```
 
 To use it in a downstream deployment, install the package and add a
-`dsh.client` row in your `cordis.patch.yml`:
+row in your `cordis.patch.yml`:
 
 ```yaml
 - insert:
     - id: ui-peak-hours
       name: '@deepseek-ai/dsh-client-ui-peak-hours'
 ```
+
+The same row covers both faces: the host face (`src/index.ts`) is
+loaded as a cordis plugin by the row, and the browser face
+(`src/client/`) is composed into `window.__DSH_BOOT__` by the modules
+node half through the package's `dsh.client` declaration.
+
+The host face needs two services — `credentials` and `webServer` —
+both standard in the Web bundle. If either is missing, the route
+still registers and answers a JSON `unavailable` error so the
+balance row degrades gracefully.
 
 The overlay depends on the `sessions` Cordis service (the same one the
 trajectory view uses), so the `inject` declaration in `src/client/index.ts`
@@ -103,7 +171,9 @@ lists `['slots', 'sessions']`.
 | `ctx.sessions.list` | Enumerate all session ids. |
 | `ctx.sessions.binding(id).session.getSnapshot().views.get('trajectory').eventNodes` | Per-session assistant-message nodes; each carries `usage: { inputTokens, cacheReadTokens, outputTokens }` and `provenance.model`. |
 | Browser clock | Phase determination. |
-| `fetch('https://api.deepseek.com/user/balance')` | Live account balance. |
+| Host `GET /api/peak-hours/balance` (this package's host face) | Live account balance. |
+| `ctx.credentials.resolve('DEEPSEEK_API_KEY')` (host) | Server-side API key. Never reaches the browser. |
+| `launchEnvironmentOf(ctx).get('DEEPSEEK_API_KEY')` (host, fallback) | Environment-variable fallback. Never reaches the browser. |
 
 The aggregation walks the trajectory view snapshot per session; cost is
 computed lazily per record. Cache invalidation re-fires on each
@@ -134,17 +204,15 @@ assembled request.
   system clock against UTC windows. A user with a mis-set clock will see
   a misleading status. A future iteration could expose a `useEffect`
   fetch of `worldtimeapi.org` for a sanity check.
-- **CORS on `/user/balance`** — if `api.deepseek.com` does not return
-  `Access-Control-Allow-Origin` for the harness origin, the balance line
-  silently degrades to a `—` with a "fetch failed" hint. The chart still
-  works because it is local data. A future iteration could add a small
-  host-side Cordis service that proxies the balance fetch server-side,
-  which would not need CORS.
 - **Trajectory view load** — the aggregation depends on each session's
   trajectory view having been built. Sessions that have never been opened
   in the trajectory tab may have a `EMPTY_TRAJECTORY_SNAPSHOT` and
   contribute no records. The chart will show `partial` in the header if
   any session was unreachable.
+- **Single-currency balance row** — the tooltip renders the first
+  `balance_infos[]` entry. DeepSeek's response shape can carry more
+  than one currency; a future iteration can show all of them in a
+  small table without changing the wire.
 - **No host-side snapshot service** — there is intentionally no
   `ctx.peakHours` service for cross-plugin use. The next iteration can
   add one if a session-event consumer or a non-React host view needs

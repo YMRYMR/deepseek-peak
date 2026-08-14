@@ -1,10 +1,15 @@
 /**
  * UsageTooltip: hover overlay for the peak-hours pill.
  *
- * Renders one card per model with a tiny inline-SVG daily bar chart.
- * Anchored below the pill, right-aligned. Same color tokens and border
- * style as the pill so the two read as one element. The pill itself
- * is unchanged.
+ * Renders one card with:
+ *   - the live DeepSeek account balance (host-routed, no key in browser)
+ *   - a subtitle line: spent ≈ $X · N messages (per-trajectory-walk totals)
+ *   - one chart card per model with a tiny inline-SVG daily bar chart
+ *   - a footer with the date range metadata
+ *
+ * The card is anchored below the pill, right-aligned. It uses the same
+ * color tokens and border style as the pill so the two read as one
+ * element. The pill itself is unchanged.
  *
  * Width: the card fills the host (= the pill's width) exactly. The
  * chart scales to fit the card via SVG viewBox so 30 daily bars
@@ -21,6 +26,7 @@ import {
   formatTokens, formatUsd, type ModelUsage, type UsageSummary,
 } from './usage.ts'
 import type { Phase } from './domain.ts'
+import type { BalanceError, BalanceResult } from './balance.ts'
 import css from './UsageTooltip.module.css'
 
 const DAY_MS = 24 * 60 * 60 * 1000
@@ -38,10 +44,12 @@ export interface UsageTooltipProps {
   isLoading: boolean
   phase: Phase
   preLaunch: boolean
+  balance: BalanceResult | null
+  balanceLoading: boolean
 }
 
 export function UsageTooltip(props: UsageTooltipProps) {
-  const { summary, isLoading, phase, preLaunch } = props
+  const { summary, isLoading, phase, preLaunch, balance, balanceLoading } = props
 
   const cardClass = [
     css.card,
@@ -49,7 +57,7 @@ export function UsageTooltip(props: UsageTooltipProps) {
     preLaunch ? css.cardPreLaunch : '',
   ].filter(Boolean).join(' ')
 
-  if (isLoading) {
+  if (isLoading && summary === null) {
     return (
       <div className={cardClass} role="tooltip" data-state="loading">
         <span className={css.spinner} aria-hidden="true" />
@@ -63,19 +71,7 @@ export function UsageTooltip(props: UsageTooltipProps) {
   return (
     <div className={cardClass} role="tooltip" data-state={hasData ? 'ready' : 'empty'}>
       <header className={css.header}>
-        {hasData ? (
-          <div className={css.subtitle}>
-            Spent <span className={css.subNum}>≈ {formatUsd(summary.totalCost)}</span>
-            <span className={css.subDot}>·</span>
-            <span>{summary.totalMessages.toLocaleString()} messages</span>
-            {summary.hadMissing && <span className={css.warn}>· partial</span>}
-          </div>
-        ) : (
-          <div className={css.subtitle}>
-            <span className={css.subDot}>·</span>
-            <span>Usage appears here once you chat with a V4 model</span>
-          </div>
-        )}
+        <BalanceRow balance={balance} loading={balanceLoading} />
       </header>
 
       {hasData && (
@@ -101,10 +97,90 @@ export function UsageTooltip(props: UsageTooltipProps) {
               </span>
             </>
           )}
+          {summary.hadMissing && (
+            <>
+              <span className={css.footDot}>·</span>
+              <span className={css.warn} title="At least one session was unreachable for the walk">partial</span>
+            </>
+          )}
         </footer>
       )}
     </div>
   )
+}
+
+interface BalanceRowProps {
+  balance: BalanceResult | null
+  loading: boolean
+}
+
+function BalanceRow({ balance, loading }: BalanceRowProps) {
+  // No fetch has resolved yet and one is in flight: show a subdued
+  // placeholder so the row height is stable while the request resolves.
+  if (balance === null) {
+    return (
+      <div className={css.balanceRow} data-state={loading ? 'loading' : 'idle'}>
+        <span className={css.balanceLabel}>BALANCE</span>
+        {loading ? (
+          <>
+            <span className={css.spinner} aria-hidden="true" />
+            <span className={css.balanceValue} aria-live="polite">…</span>
+          </>
+        ) : (
+          <span className={css.balanceValue} title="Hover for one tick to trigger a fetch">
+            —
+          </span>
+        )}
+      </div>
+    )
+  }
+  if (!balance.ok) {
+    // One short label per kind so the user can see what's wrong at a
+    // glance. The full message (status, exception text, parse line) is
+    // always on the title attribute for the hover tooltip.
+    const shortLabel = balanceErrorLabel(balance.error.kind)
+    return (
+      <div className={css.balanceRow} data-state="error" title={balance.error.message}>
+        <span className={css.balanceLabel}>BALANCE</span>
+        <span className={css.balanceError} aria-live="polite">{shortLabel}</span>
+        {balance.error.status !== undefined && (
+          <span className={css.balanceErrorStatus}>HTTP {balance.error.status}</span>
+        )}
+      </div>
+    )
+  }
+  const primary = balance.balance.entries[0]
+  if (primary === undefined) {
+    return (
+      <div className={css.balanceRow} data-state="empty">
+        <span className={css.balanceLabel}>BALANCE</span>
+        <span className={css.balanceValue}>—</span>
+      </div>
+    )
+  }
+  return (
+    <div className={css.balanceRow} data-state="ready" title={`Refreshed ${new Date(balance.balance.refreshedAt).toLocaleTimeString()}`}>
+      <span className={css.balanceLabel}>BALANCE</span>
+      <span className={css.balanceValue} aria-live="polite">
+        {formatUsd(primary.total)}
+        <span className={css.balanceCurrency}>{' '}{primary.currency}</span>
+      </span>
+    </div>
+  )
+}
+
+/**
+ * Map the host's error kind to a short, glanceable label. The full
+ * upstream message is still in the row's title attribute.
+ */
+function balanceErrorLabel(kind: BalanceError['kind']): string {
+  switch (kind) {
+    case 'no-key': return 'no API key on host'
+    case 'network': return 'fetch failed (network)'
+    case 'http': return 'fetch failed (http)'
+    case 'parse': return 'fetch failed (parse)'
+    case 'unavailable': return 'fetch failed (unavailable)'
+  }
 }
 
 interface ModelCardProps {
