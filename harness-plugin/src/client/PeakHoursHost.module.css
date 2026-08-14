@@ -12,3 +12,18 @@
    * impose a width that would squeeze the children. */
   min-width: 0;
 }
+
+/* Invisible bridge across the small gap between the pill's bottom edge and
+ * the card's top edge. Because the card sits at `top: calc(100% + 2px)` on
+ * the host, the mouse passing through that 2 px slice would otherwise
+ * leave the host (and the card) — this bridge absorbs it so the user can
+ * move the cursor from pill to card without the card flashing off. */
+.host::after {
+  content: '';
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  height: 6px;
+  pointer-events: auto;
+}

@@ -21,9 +21,9 @@ import type { Phase } from './domain.ts'
 import css from './UsageTooltip.module.css'
 
 const DAY_MS = 24 * 60 * 60 * 1000
-const BAR_PX = 4
+const BAR_PX = 2
 const BAR_GAP_PX = 1
-const CHART_H = 56
+const CHART_H = 44
 
 export interface UsageTooltipProps {
   summary: UsageSummary | null

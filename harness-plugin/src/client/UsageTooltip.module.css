@@ -9,7 +9,7 @@
 
 .card {
   position: absolute;
-  top: calc(100% + 6px);
+  top: calc(100% + 2px);
   /* Right-align with the pill's right edge, but allow the card to grow
    * leftward as needed. `min-width: 100%` of the host keeps it from being
    * narrower than the pill even when the content would prefer to shrink. */
@@ -22,13 +22,16 @@
   background: color-mix(in srgb, currentColor 7%, var(--dsw-color-bg-elevated, #1a1f29));
   color: inherit;
   border: 1px solid currentColor;
-  border-radius: 12px;
-  padding: 10px 12px 8px;
+  border-radius: 10px;
+  padding: 8px 10px 6px;
   font-size: 11px;
   line-height: 1.35;
   box-shadow: 0 6px 20px rgba(0, 0, 0, 0.25);
   z-index: 1000;
-  pointer-events: none;
+  /* The card needs to receive pointer events on its interactive elements.
+   * The non-interactive regions still pass through to whatever is below
+   * them via the per-element pointer-events: none on chart/labels. */
+  pointer-events: auto;
   animation: fadeIn 140ms ease-out;
 }
 
@@ -58,8 +61,9 @@
   display: flex;
   flex-direction: column;
   gap: 2px;
-  padding-bottom: 6px;
+  padding-bottom: 5px;
   border-bottom: 1px solid color-mix(in srgb, currentColor 25%, transparent);
+  pointer-events: none;
 }
 
 .titleLine {
@@ -263,14 +267,15 @@
 .models {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  padding: 8px 0 4px;
+  gap: 6px;
+  padding: 6px 0 2px;
+  pointer-events: none;
 }
 
 .model {
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: 2px;
 }
 
 .modelHeader {
@@ -301,6 +306,8 @@
   display: flex;
   gap: 4px;
   align-items: stretch;
+  /* Don't intercept mouse events; the chart is visual only. */
+  pointer-events: none;
 }
 
 .yAxis {
@@ -309,8 +316,9 @@
   justify-content: space-between;
   align-items: flex-end;
   padding: 1px 0 8px;
-  width: 24px;
-  flex: 0 0 24px;
+  width: 22px;
+  flex: 0 0 22px;
+  pointer-events: none;
 }
 
 .yTick {
@@ -340,9 +348,10 @@
 
 .xAxis {
   position: relative;
-  height: 10px;
-  margin-left: 28px;
+  height: 9px;
+  margin-left: 26px;
   margin-top: 1px;
+  pointer-events: none;
 }
 
 .xTick {
@@ -361,18 +370,20 @@
   display: flex;
   align-items: center;
   gap: 5px;
-  padding-top: 6px;
-  margin-top: 3px;
+  padding-top: 5px;
+  margin-top: 2px;
   border-top: 1px solid color-mix(in srgb, currentColor 18%, transparent);
   font-size: 9px;
   opacity: 0.6;
+  pointer-events: none;
 }
 
 .emptyBody {
-  padding: 6px 0 2px;
+  padding: 4px 0 2px;
   display: flex;
   flex-direction: column;
   gap: 3px;
+  pointer-events: none;
 }
 
 .placeholder {
