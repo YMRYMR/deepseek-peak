@@ -6,14 +6,17 @@
  * style as the pill so the two read as one element. The pill itself
  * is unchanged.
  *
- * Data: `UsageSummary` from `./usage.ts` and an optional `BalanceSnapshot`
- * from `./balance.ts`. The parent owns the lifecycle and re-fetches only
- * when needed.
+ * Width: the card fills the host (= the pill's width) exactly. The
+ * chart scales to fit the card via SVG viewBox so 30 daily bars
+ * always cover the available width regardless of pill width.
+ *
+ * Data: `UsageSummary` from `./usage.ts`. The parent owns the
+ * aggregation lifecycle and re-aggregates only when the underlying
+ * sessions store changes.
  */
 
-import { useMemo, useState } from 'react'
+import { useMemo } from 'react'
 import { modelDisplayName } from './pricing.ts'
-import { maskKey, type BalanceError, type BalanceSnapshot } from './balance.ts'
 import {
   formatTokens, formatUsd, type ModelUsage, type UsageSummary,
 } from './usage.ts'
@@ -21,34 +24,24 @@ import type { Phase } from './domain.ts'
 import css from './UsageTooltip.module.css'
 
 const DAY_MS = 24 * 60 * 60 * 1000
-const BAR_PX = 2
-const BAR_GAP_PX = 1
-const CHART_H = 44
+const RANGE_DAYS = 30
+// Chart viewBox is in unit-space: 30 days wide, 100 units tall. The
+// actual rendered size is set by the CSS `width: 100%` of the chart
+// wrapper, so the chart always fits the card width exactly.
+const CHART_VIEW_W = 30
+const CHART_VIEW_H = 100
+const BAR_UNIT = 0.78  // bar width in viewBox units (gap = 0.22)
+const FLOOR_UNIT = 0.78
 
 export interface UsageTooltipProps {
   summary: UsageSummary | null
   isLoading: boolean
-  balance: BalanceSnapshot | null
-  balanceError: BalanceError | null
-  hasApiKey: boolean
   phase: Phase
   preLaunch: boolean
-  onSaveKey: (key: string) => void
-  onClearKey: () => void
-  onRefreshBalance: () => void
-  isRefreshingBalance: boolean
 }
 
 export function UsageTooltip(props: UsageTooltipProps) {
-  const {
-    summary, isLoading,
-    balance, balanceError, hasApiKey,
-    phase, preLaunch,
-    onSaveKey, onClearKey, onRefreshBalance, isRefreshingBalance,
-  } = props
-
-  const [settingsOpen, setSettingsOpen] = useState(false)
-  const [draftKey, setDraftKey] = useState('')
+  const { summary, isLoading, phase, preLaunch } = props
 
   const cardClass = [
     css.card,
@@ -70,45 +63,26 @@ export function UsageTooltip(props: UsageTooltipProps) {
   return (
     <div className={cardClass} role="tooltip" data-state={hasData ? 'ready' : 'empty'}>
       <header className={css.header}>
-        <BalanceLine
-          balance={balance}
-          balanceError={balanceError}
-          hasApiKey={hasApiKey}
-          isRefreshing={isRefreshingBalance}
-          onRefresh={onRefreshBalance}
-          onOpenSettings={() => { setSettingsOpen(true); setDraftKey('') }}
-        />
-        {hasData && (
+        {hasData ? (
           <div className={css.subtitle}>
             Spent <span className={css.subNum}>≈ {formatUsd(summary.totalCost)}</span>
             <span className={css.subDot}>·</span>
-            <span>{summary.totalMessages.toLocaleString()} messages here</span>
+            <span>{summary.totalMessages.toLocaleString()} messages</span>
             {summary.hadMissing && <span className={css.warn}>· partial</span>}
+          </div>
+        ) : (
+          <div className={css.subtitle}>
+            <span className={css.subDot}>·</span>
+            <span>Usage appears here once you chat with a V4 model</span>
           </div>
         )}
       </header>
-
-      {settingsOpen && (
-        <SettingsForm
-          currentMask={hasApiKey ? maskKey('') : 'not set'}
-          draftKey={draftKey}
-          onDraftChange={setDraftKey}
-          onSave={() => {
-            const k = draftKey.trim()
-            if (k.length > 0) onSaveKey(k)
-            setSettingsOpen(false)
-            setDraftKey('')
-          }}
-          onCancel={() => { setSettingsOpen(false); setDraftKey('') }}
-          onClear={() => { onClearKey(); setSettingsOpen(false); setDraftKey('') }}
-        />
-      )}
 
       {hasData && (
         <div className={css.models}>
           {summary.models.map((m) => (
             <ModelCard key={m.model} model={m}
-              days={Math.round((summary.rangeEndUtc.getTime() - summary.rangeStartUtc.getTime()) / DAY_MS) + 1}
+              days={RANGE_DAYS}
               rangeStartMs={summary.rangeStartUtc.getTime()} />
           ))}
         </div>
@@ -116,7 +90,7 @@ export function UsageTooltip(props: UsageTooltipProps) {
 
       {hasData && (
         <footer className={css.footer}>
-          <span>Last {summary.rangeDays} days</span>
+          <span>Last {RANGE_DAYS} days</span>
           <span className={css.footDot}>·</span>
           <span>UTC</span>
           {summary.firstRecordMs !== null && (
@@ -129,116 +103,6 @@ export function UsageTooltip(props: UsageTooltipProps) {
           )}
         </footer>
       )}
-
-      {!hasData && (
-        <div className={css.emptyBody}>
-          <span className={css.placeholder}>
-            No tracked usage in the last {summary?.rangeDays ?? 30} days.
-          </span>
-          <span className={css.placeholderHint}>
-            Usage appears here once you chat with a V4 model.
-          </span>
-        </div>
-      )}
-    </div>
-  )
-}
-
-interface BalanceLineProps {
-  balance: BalanceSnapshot | null
-  balanceError: BalanceError | null
-  hasApiKey: boolean
-  isRefreshing: boolean
-  onRefresh: () => void
-  onOpenSettings: () => void
-}
-
-function BalanceLine({
-  balance, balanceError, hasApiKey, isRefreshing, onRefresh, onOpenSettings,
-}: BalanceLineProps) {
-  if (balance !== null) {
-    const usd = balance.entries.find((e) => e.currency === 'USD') ?? balance.entries[0]
-    if (usd !== undefined) {
-      const age = Math.max(0, Math.round((Date.now() - balance.refreshedAt) / 1000))
-      return (
-        <div className={css.titleLine} title={`Refreshed ${age}s ago — click ↻ to refresh`}>
-          <span className={css.titleLabel}>Balance</span>
-          <span className={css.titleNum}>{formatUsd(usd.total)}</span>
-          <span className={css.titleUnit}>{usd.currency}</span>
-          <button
-            type="button"
-            className={css.refreshBtn}
-            onClick={onRefresh}
-            disabled={isRefreshing}
-            aria-label="Refresh balance"
-          >↻</button>
-        </div>
-      )
-    }
-  }
-  if (balanceError !== null) {
-    return (
-      <div className={css.titleLine}>
-        <span className={css.titleLabel}>Balance</span>
-        <span className={css.errorHint} title={balanceError.message}>
-          {balanceError.kind === 'no-key' || !hasApiKey
-            ? 'set key for live balance'
-            : 'fetch failed'}
-        </span>
-        <button type="button" className={css.refreshBtn} onClick={onOpenSettings}
-          aria-label="Configure API key">⚙</button>
-      </div>
-    )
-  }
-  // No fetch yet.
-  return (
-    <div className={css.titleLine}>
-      <span className={css.titleLabel}>Balance</span>
-      <span className={css.errorHint}>{hasApiKey ? 'loading…' : 'set key for live balance'}</span>
-      <button type="button" className={css.refreshBtn} onClick={onOpenSettings}
-        aria-label="Configure API key">⚙</button>
-    </div>
-  )
-}
-
-interface SettingsFormProps {
-  currentMask: string
-  draftKey: string
-  onDraftChange: (v: string) => void
-  onSave: () => void
-  onCancel: () => void
-  onClear: () => void
-}
-
-function SettingsForm(props: SettingsFormProps) {
-  return (
-    <div className={css.settings} role="dialog" aria-label="DeepSeek API key">
-      <label className={css.settingsLabel}>
-        DeepSeek API key
-        <input
-          type="password"
-          autoComplete="off"
-          spellCheck={false}
-          className={css.settingsInput}
-          placeholder="sk-…"
-          value={props.draftKey}
-          onChange={(e) => props.onDraftChange(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') { e.preventDefault(); props.onSave() }
-            if (e.key === 'Escape') { e.preventDefault(); props.onCancel() }
-          }}
-        />
-      </label>
-      <div className={css.settingsHint}>
-        Stored locally in this browser only. Used to call
-        <code> /user/balance</code>. Never logged or sent anywhere else.
-      </div>
-      <div className={css.settingsActions}>
-        <button type="button" className={css.btn} onClick={props.onCancel}>Cancel</button>
-        <button type="button" className={css.btnGhost} onClick={props.onClear}>Clear</button>
-        <button type="button" className={css.btnPrimary} onClick={props.onSave}
-          disabled={props.draftKey.trim().length === 0}>Save</button>
-      </div>
     </div>
   )
 }
@@ -250,29 +114,25 @@ interface ModelCardProps {
 }
 
 function ModelCard({ model, days, rangeStartMs }: ModelCardProps) {
-  const width = days * BAR_PX + (days - 1) * BAR_GAP_PX
-  const { bars, max, ticks, labels } = useMemo(() => {
-    const series = new Array<number>(days).fill(0)
+  const { series, max, labels } = useMemo(() => {
+    const s = new Array<number>(days).fill(0)
     for (const [dateStr, bucket] of model.daily) {
       const dayIndex = Math.round(
         (Date.parse(`${dateStr}T00:00:00Z`) - rangeStartMs) / DAY_MS
       )
-      if (dayIndex >= 0 && dayIndex < days) series[dayIndex] = bucket.tokens
+      if (dayIndex >= 0 && dayIndex < days) s[dayIndex] = bucket.tokens
     }
-    const maxVal = Math.max(1, ...series)
-    const tickValues = [0, Math.round(maxVal / 3), Math.round((2 * maxVal) / 3), maxVal]
+    const maxVal = Math.max(1, ...s)
     const labelCount = Math.min(5, days)
     const labelIdx: number[] = []
     for (let i = 0; i < labelCount; i++) {
       labelIdx.push(Math.round((i * (days - 1)) / Math.max(1, labelCount - 1)))
     }
-    return { bars: series, max: maxVal, ticks: tickValues, labels: labelIdx }
+    return { series: s, max: maxVal, labels: labelIdx }
   }, [model, days, rangeStartMs])
 
-  const yAt = (value: number): number => {
-    if (max === 0) return CHART_H
-    return CHART_H - Math.round((value / max) * CHART_H)
-  }
+  // Y-axis ticks in viewBox units (0, 33, 66, 100).
+  const yTickValues = [0, Math.round(max / 3), Math.round((2 * max) / 3), max]
 
   return (
     <section className={css.model} data-model={model.model}>
@@ -285,46 +145,61 @@ function ModelCard({ model, days, rangeStartMs }: ModelCardProps) {
         </span>
       </div>
       <div className={css.chartWrap}>
-        <div className={css.yAxis} aria-hidden="true">
-          {ticks.slice().reverse().map((t) => (
-            <span key={t} className={css.yTick}>{formatTokens(t)}</span>
-          ))}
-        </div>
         <svg
           className={css.chart}
-          width={width} height={CHART_H}
-          viewBox={`0 0 ${width} ${CHART_H}`}
-          role="img"
+          viewBox={`0 0 ${CHART_VIEW_W} ${CHART_VIEW_H}`}
+          preserveAspectRatio="none"
           aria-label={`Daily tokens for ${modelDisplayName(model.model)}, last ${days} days`}
         >
-          {bars.map((value, i) => {
-            const x = i * (BAR_PX + BAR_GAP_PX)
-            const h = Math.max(0, CHART_H - yAt(value))
-            const y = CHART_H - h
-            if (h === 0) {
-              // Empty-day floor: a 2px sliver so zero days are still visible
-              // as a baseline mark, not invisible. Matches the platform's
-              // chart look where every day is represented.
-              return <rect key={i} x={x} y={CHART_H - 2} width={BAR_PX} height={2} className={css.barFloor} />
+          {series.map((value, i) => {
+            const h = max === 0 ? 0 : (value / max) * (CHART_VIEW_H - 2)
+            if (h < 1) {
+              return (
+                <rect
+                  key={i}
+                  x={i + (1 - BAR_UNIT) / 2}
+                  y={CHART_VIEW_H - FLOOR_UNIT}
+                  width={BAR_UNIT}
+                  height={FLOOR_UNIT}
+                  className={css.barFloor}
+                />
+              )
             }
             return (
-              <rect key={i} x={x} y={y} width={BAR_PX} height={h} className={css.bar} />
+              <rect
+                key={i}
+                x={i + (1 - BAR_UNIT) / 2}
+                y={CHART_VIEW_H - h}
+                width={BAR_UNIT}
+                height={h}
+                className={css.bar}
+              />
             )
           })}
         </svg>
-      </div>
-      <div className={css.xAxis} aria-hidden="true" style={{ width }}>
-        {labels.map((idx) => {
-          const date = new Date(rangeStartMs + idx * DAY_MS)
-          const mm = String(date.getUTCMonth() + 1)
-          const dd = String(date.getUTCDate())
-          return (
-            <span key={idx} className={css.xTick}
-              style={{ left: idx * (BAR_PX + BAR_GAP_PX) }}>
-              {mm}/{dd}
-            </span>
-          )
-        })}
+        {/* Y-axis labels overlay the chart's left edge in absolute terms. */}
+        <div className={css.yAxis} aria-hidden="true">
+          {yTickValues.slice().reverse().map((t) => (
+            <span key={t} className={css.yTick}>{formatTokens(t)}</span>
+          ))}
+        </div>
+        {/* X-axis labels positioned as percentages of the chart width. */}
+        <div className={css.xAxis} aria-hidden="true">
+          {labels.map((idx) => {
+            const date = new Date(rangeStartMs + idx * DAY_MS)
+            const mm = String(date.getUTCMonth() + 1)
+            const dd = String(date.getUTCDate())
+            return (
+              <span
+                key={idx}
+                className={css.xTick}
+                style={{ left: `${(idx / days) * 100}%` }}
+              >
+                {mm}/{dd}
+              </span>
+            )
+          })}
+        </div>
       </div>
     </section>
   )
