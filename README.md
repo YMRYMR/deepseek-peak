@@ -10,6 +10,11 @@ phase change.
 > is off-peak). Effective **2026-08-16 16:00 UTC**. Peak rates are 2× the
 > off-peak baseline.
 
+![Peak-hours pill in the harness session header](./docs/pill-preview.png)
+
+*OFF-PEAK pill with the `PRE-CUTOVER` badge, ~52h countdown to the new
+schedule, live target arrow, and the Session log button on the right.*
+
 This repo ships two things:
 
 1. **`harness-plugin/`** — a `dsh-plugin` Cordis client package for the
