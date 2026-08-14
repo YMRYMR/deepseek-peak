@@ -17,7 +17,7 @@ const PEAK_WINDOWS_UTC = [
   { startH: 6, endH: 10 }, // 14:00–18:00 CST
 ] as const
 
-const CUTOVER_UTC = Date.UTC(2026, 7, 16, 16, 0, 0) // Aug 16, 2026 16:00 UTC
+export const CUTOVER_UTC = Date.UTC(2026, 7, 16, 16, 0, 0) // Aug 16, 2026 16:00 UTC
 const HOUR_MS = 3600 * 1000
 
 export type Phase = 'peak' | 'off'

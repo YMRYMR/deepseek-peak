@@ -1,0 +1,14 @@
+/* PeakHoursHost: the pill + tooltip live together inside a single hover
+ * surface. The container is inline-flex so the pill's natural width is
+ * preserved and the tooltip can be absolutely positioned below the
+ * pill's right edge. No visual styling on the host itself — it must
+ * stay transparent so the pill's existing aesthetic is unchanged. */
+
+.host {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  /* The pill already has its own min-width:0; the host just needs to not
+   * impose a width that would squeeze the children. */
+  min-width: 0;
+}

@@ -1,0 +1,404 @@
+/* UsageTooltip: hover card that inherits the peak-hours pill's aesthetic
+ * exactly — same color tokens (currentColor for green/red, same color-mix
+ * tint, same dashed border when pre-cutover). The card's width is matched
+ * to its parent (the host), which is sized to the pill, so the tooltip
+ * spans the same horizontal footprint as the pill itself.
+ *
+ * The pill is the visual reference; every color here is derived from the
+ * same `color: currentColor` cascade the pill uses. */
+
+.card {
+  position: absolute;
+  top: calc(100% + 6px);
+  /* Right-align with the pill's right edge, but allow the card to grow
+   * leftward as needed. `min-width: 100%` of the host keeps it from being
+   * narrower than the pill even when the content would prefer to shrink. */
+  right: 0;
+  left: auto;
+  min-width: 100%;
+  width: max-content;
+  max-width: min(420px, calc(100vw - 32px));
+  /* Tinted surface that follows the pill's hue. */
+  background: color-mix(in srgb, currentColor 7%, var(--dsw-color-bg-elevated, #1a1f29));
+  color: inherit;
+  border: 1px solid currentColor;
+  border-radius: 12px;
+  padding: 10px 12px 8px;
+  font-size: 11px;
+  line-height: 1.35;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.25);
+  z-index: 1000;
+  pointer-events: none;
+  animation: fadeIn 140ms ease-out;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(-2px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* Off-peak: green, matching the pill's `.off` rule. */
+.cardOff {
+  color: var(--dsw-color-success, #19c37d);
+  background: color-mix(in srgb, var(--dsw-color-success, #19c37d) 7%, var(--dsw-color-bg-elevated, #1a1f29));
+}
+
+/* Peak: red, matching the pill's `.peak` rule. */
+.cardPeak {
+  color: var(--dsw-color-danger, #ef4444);
+  background: color-mix(in srgb, var(--dsw-color-danger, #ef4444) 7%, var(--dsw-color-bg-elevated, #1a1f29));
+}
+
+/* Pre-cutover: dashed border, same as the pill's `.preLaunch` rule. */
+.cardPreLaunch {
+  border-style: dashed;
+}
+
+.header {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid color-mix(in srgb, currentColor 25%, transparent);
+}
+
+.titleLine {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+}
+
+.titleLabel {
+  font-size: 9px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  opacity: 0.6;
+}
+
+.titleNum {
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: currentColor;
+  font-variant-numeric: tabular-nums;
+}
+
+.titleNum[data-tone="warn"] {
+  opacity: 0.5;
+}
+
+.titleNum[data-tone="muted"] {
+  opacity: 0.4;
+}
+
+.titleUnit {
+  font-size: 9px;
+  letter-spacing: 0.04em;
+  opacity: 0.55;
+}
+
+.errorHint {
+  font-size: 9px;
+  opacity: 0.65;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.refreshBtn {
+  pointer-events: auto;
+  margin-left: auto;
+  background: transparent;
+  border: 1px solid currentColor;
+  color: currentColor;
+  border-radius: 6px;
+  width: 20px;
+  height: 20px;
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 120ms ease;
+  opacity: 0.75;
+}
+
+.refreshBtn:hover:not(:disabled) {
+  background: color-mix(in srgb, currentColor 18%, transparent);
+  opacity: 1;
+}
+
+.refreshBtn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.subtitle {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10px;
+  opacity: 0.75;
+}
+
+.subNum {
+  color: currentColor;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.subDot, .footDot, .modelDot {
+  opacity: 0.4;
+}
+
+.warn {
+  color: #fbbf24;
+  font-weight: 500;
+}
+
+.settings {
+  pointer-events: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 8px 0 4px;
+  margin: 4px 0 0;
+  border-top: 1px solid color-mix(in srgb, currentColor 18%, transparent);
+}
+
+.settingsLabel {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 9px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  opacity: 0.6;
+}
+
+.settingsInput {
+  font-family: var(--dsw-font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 11px;
+  padding: 5px 7px;
+  border-radius: 5px;
+  background: color-mix(in srgb, currentColor 6%, transparent);
+  border: 1px solid color-mix(in srgb, currentColor 35%, transparent);
+  color: currentColor;
+  outline: none;
+  transition: border-color 120ms ease;
+}
+
+.settingsInput::placeholder {
+  color: currentColor;
+  opacity: 0.4;
+}
+
+.settingsInput:focus {
+  border-color: currentColor;
+}
+
+.settingsHint {
+  font-size: 9px;
+  line-height: 1.4;
+  opacity: 0.6;
+}
+
+.settingsHint code {
+  font-family: var(--dsw-font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  background: color-mix(in srgb, currentColor 12%, transparent);
+  padding: 0 3px;
+  border-radius: 3px;
+}
+
+.settingsActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 5px;
+  margin-top: 3px;
+}
+
+.btn, .btnGhost, .btnPrimary {
+  font-size: 10px;
+  padding: 3px 8px;
+  border-radius: 5px;
+  border: 1px solid currentColor;
+  cursor: pointer;
+  transition: background 120ms ease, opacity 120ms ease;
+  font-weight: 500;
+  background: transparent;
+  color: currentColor;
+}
+
+.btn {
+  opacity: 0.7;
+}
+
+.btn:hover {
+  background: color-mix(in srgb, currentColor 14%, transparent);
+  opacity: 1;
+}
+
+.btnGhost {
+  opacity: 0.55;
+  border-color: color-mix(in srgb, currentColor 35%, transparent);
+}
+
+.btnGhost:hover {
+  opacity: 0.9;
+}
+
+.btnPrimary {
+  opacity: 0.95;
+}
+
+.btnPrimary:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+
+.btnPrimary:hover:not(:disabled) {
+  background: color-mix(in srgb, currentColor 22%, transparent);
+}
+
+.models {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px 0 4px;
+}
+
+.model {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.modelHeader {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.modelName {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: currentColor;
+  opacity: 0.85;
+}
+
+.modelMeta {
+  font-size: 9px;
+  opacity: 0.65;
+  font-variant-numeric: tabular-nums;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 3px;
+}
+
+.chartWrap {
+  display: flex;
+  gap: 4px;
+  align-items: stretch;
+}
+
+.yAxis {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  align-items: flex-end;
+  padding: 1px 0 8px;
+  width: 24px;
+  flex: 0 0 24px;
+}
+
+.yTick {
+  font-size: 8px;
+  color: currentColor;
+  opacity: 0.45;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
+.chart {
+  display: block;
+  flex: 0 0 auto;
+}
+
+/* Bar fill follows currentColor so the chart inherits the pill's hue:
+ * green when off-peak, red when peak. */
+.bar {
+  fill: currentColor;
+  opacity: 0.85;
+}
+
+.barFloor {
+  fill: currentColor;
+  opacity: 0.35;
+}
+
+.xAxis {
+  position: relative;
+  height: 10px;
+  margin-left: 28px;
+  margin-top: 1px;
+}
+
+.xTick {
+  position: absolute;
+  top: 0;
+  transform: translateX(-50%);
+  font-size: 8px;
+  color: currentColor;
+  opacity: 0.5;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  line-height: 1;
+}
+
+.footer {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding-top: 6px;
+  margin-top: 3px;
+  border-top: 1px solid color-mix(in srgb, currentColor 18%, transparent);
+  font-size: 9px;
+  opacity: 0.6;
+}
+
+.emptyBody {
+  padding: 6px 0 2px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.placeholder {
+  display: inline-block;
+  font-size: 10px;
+  opacity: 0.7;
+}
+
+.placeholderHint {
+  display: block;
+  font-size: 9px;
+  opacity: 0.5;
+}
+
+.spinner {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  margin-right: 6px;
+  border-radius: 50%;
+  border: 1.5px solid color-mix(in srgb, currentColor 30%, transparent);
+  border-top-color: currentColor;
+  animation: spin 700ms linear infinite;
+  vertical-align: -1px;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}

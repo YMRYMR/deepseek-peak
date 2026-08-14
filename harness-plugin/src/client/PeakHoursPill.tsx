@@ -5,8 +5,7 @@
  *
  * Auto-sizes: the pill collapses to its essentials (dot + label + countdown)
  * and lets the countdown text truncate with an ellipsis when the host utility
- * row is narrow. The full schedule is always available on the title attribute
- * for hover inspection.
+ * row is narrow.
  */
 
 import { useEffect, useState } from 'react'
@@ -31,11 +30,6 @@ export function PeakHoursPill() {
     hour12: false,
   })
 
-  // Title attribute: full detail for hover. The visible pill stays compact.
-  const detail = snap.preLaunch
-    ? `Pre-cutover: ${phaseLabel(snap.phase)} band. ${formatCountdown(snap.minutesToNext)} until peak/off-peak begins at ${localBoundary}.`
-    : `${phaseLabel(snap.phase)} band. ${formatCountdown(snap.minutesToNext)} until ${snap.nextLabel} at ${localBoundary}.`
-
   return (
     <span
       className={[
@@ -48,7 +42,6 @@ export function PeakHoursPill() {
       data-pre-launch={snap.preLaunch ? 'true' : 'false'}
       role="status"
       aria-live="polite"
-      title={detail}
     >
       <span className={css.dot} aria-hidden="true" />
       <span className={css.label}>{phaseLabel(snap.phase)}</span>
