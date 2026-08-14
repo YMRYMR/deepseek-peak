@@ -145,6 +145,12 @@ function ModelCard({ model, days, rangeStartMs }: ModelCardProps) {
         </span>
       </div>
       <div className={css.chartWrap}>
+        {/* Y-axis labels first so they sit on the LEFT in the flex row. */}
+        <div className={css.yAxis} aria-hidden="true">
+          {yTickValues.slice().reverse().map((t) => (
+            <span key={t} className={css.yTick}>{formatTokens(t)}</span>
+          ))}
+        </div>
         <svg
           className={css.chart}
           viewBox={`0 0 ${CHART_VIEW_W} ${CHART_VIEW_H}`}
@@ -177,12 +183,6 @@ function ModelCard({ model, days, rangeStartMs }: ModelCardProps) {
             )
           })}
         </svg>
-        {/* Y-axis labels overlay the chart's left edge in absolute terms. */}
-        <div className={css.yAxis} aria-hidden="true">
-          {yTickValues.slice().reverse().map((t) => (
-            <span key={t} className={css.yTick}>{formatTokens(t)}</span>
-          ))}
-        </div>
         {/* X-axis labels positioned as percentages of the chart width. */}
         <div className={css.xAxis} aria-hidden="true">
           {labels.map((idx) => {
