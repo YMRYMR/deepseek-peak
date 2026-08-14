@@ -64,7 +64,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import { Buffer } from 'node:buffer'
 import type { Context } from '@deepseek-ai/cordis'
 import { credentialRef, type CredentialProvider, type CredentialRef } from '@deepseek-ai/dsh-credentials'
-import { installSettingsSection, settingsNamespace, type SettingsScope } from '@deepseek-ai/dsh-settings'
+import { settingsNamespace } from '@deepseek-ai/dsh-settings'
 import { launchEnvironmentOf } from '@deepseek-ai/dsh-launch-environment'
 import type { GenerateOptions, StreamChunk } from '@deepseek-ai/dsh-llm'
 // Type-only: pulls the `webServer` Context merge so the route registration
@@ -472,96 +472,96 @@ export function apply(ctx: Context): void {
   phaseTimer.unref?.()
 
   /* === Settings persistence =============================================== *
-   *  The paused toggle persists in the standard settings plane. The
-   *  `installSettingsSection` helper wires the schema, the `base` (here
-   *  empty — the user owns the choice), and the live change notification.
-   *  When `settings` is unavailable we fall back to a process-local
-   *  boolean; the toggle still works, it just does not survive a restart. */
+   *  The paused toggle persists in the standard settings plane. We
+   *  register the namespace ourselves (instead of going through
+   *  `installSettingsSection`) so the POST handler can call `scope.update`
+   *  with the new value; the helper only exposes a getter thunk, not
+   *  the scope. The scope lives behind a `ctx.inject(['settings'], …)`
+   *  callback so registration waits for the settings service without
+   *  blocking the rest of `apply()`. */
 
   const initialConfig: PeakHoursConfig = { paused: false }
-  const settingsScope = ctx.get('settings') as SettingsScope<PeakHoursConfig> | undefined
-  if (settingsScope !== undefined) {
-    isPaused = settingsScope.get().paused
+  // The scope is created inside the inject callback; `null` until the
+  // settings service is ready. The POST handler awaits this getter to
+  // serialize toggle writes.
+  let updateCurrent: ((patch: object) => Promise<void>) | null = null
+  ctx.inject(['settings'], (sctx) => {
+    const scope = sctx.settings.register(STATE_NS, Config, { base: initialConfig })
+    updateCurrent = (patch) => scope.update(patch)
+    // Pull the persisted value (or the default) at attach.
+    const v = scope.get()
+    isPaused = v.paused
     recomputeBlocked()
-    installSettingsSection(ctx, STATE_NS, Config, initialConfig, {
-      setSource: (source: () => PeakHoursConfig) => {
-        // The scope's `get()` already layers base + user, so we read from
-        // it directly; this hook is here because the install helper
-        // requires it but we always pull the resolved value through the
-        // scope's own `get()`. Re-resolve on every change so a user edit
-        // flips the host flag without us caching a stale snapshot.
-        const v = source()
-        isPaused = v.paused
+    if (!isBlockedNow) void drainQueue()
+    // Watch stored changes from outside the POST path (settings UI,
+    // another tab, CLI tool) so the host flag tracks the source of
+    // truth rather than only the live POST.
+    sctx.effect(() => {
+      const dispose = scope.watch((next) => {
+        if (disposed) return
+        isPaused = next.paused
         recomputeBlocked()
         if (!isBlockedNow) void drainQueue()
-      },
-      onChange: () => {
-        // Nothing extra to do: the source-sink above already pulled the
-        // new value. This slot exists so a deployment can wire a
-        // telemetry side effect later without a plugin-version bump.
-      },
-    })
-  } else {
-    ctx.logger?.warn('ui-peak-hours: settings service is unavailable; paused toggle will not persist across restarts')
-  }
+      })
+      return () => dispose()
+    }, 'ui-peak-hours: settings watch')
+  })
 
   /* === LLM stream gate ==================================================== *
    *  The waterfall listener is the gate. When the switch is on AND the
    *  current UTC hour is inside a peak window, we hold the request in a
    *  FIFO and return a stream that yields nothing until the drainer
    *  releases it. Otherwise we forward to `next()` immediately. The
-   *  listener is registered as a fiber-scoped cordis `on`, so plugin
-   *  disposal removes it without a manual disposer. */
+   *  `llm/stream` event lives on the cordis event bus, not on the
+   *  `ctx.llm` service — registered listeners wrap the inner chain like
+   *  middleware, so this listener is just one more wrap in the waterfall.
+   *  The invariant listener (registered first via `prepend: true`) still
+   *  runs on the inner stream and validates the merged output. */
 
-  const llm = ctx.get('llm') as { on?: (event: string, listener: (...args: unknown[]) => unknown) => () => void } | undefined
-  if (llm?.on !== undefined) {
-    const disposeLlm = llm.on('llm/stream', ((options: GenerateOptions, next: () => AsyncIterable<StreamChunk>) => {
-      if (!isBlockedNow) {
-        // Fast path: pass-through. Returning the inner iterable directly
-        // is what the invariant does; it preserves the waterfall
-        // contract (the invariant validates the inner shape).
-        return next()
+  ctx.on('llm/stream', (options: GenerateOptions, next: () => AsyncIterable<StreamChunk>) => {
+    if (!isBlockedNow) {
+      // Fast path: pass-through. Returning the inner iterable directly
+      // is what the invariant does; it preserves the waterfall
+      // contract (the invariant validates the inner shape).
+      return next()
+    }
+    // Blocked path: enqueue and return a stream that blocks until
+    // the drainer fires. `drain`/`complete` are one-shot resolvers;
+    // both are called at most once.
+    let drain!: () => void
+    let complete!: () => void
+    const drainPromise = new Promise<void>((resolve) => { drain = resolve })
+    const item: QueueItem = {
+      options,
+      next,
+      drain,
+      complete: () => {},
+      enqueuedAt: Date.now(),
+    }
+    queue.push(item)
+    const signal = options.signal
+    if (signal !== undefined) {
+      // Caller cancellation: pull the item out of the queue and
+      // unblock the stream so the inner chain sees the abort and
+      // returns quickly. The agent loop's for-await breaks on the
+      // resulting `done: true`.
+      const onAbort = (): void => {
+        const idx = queue.indexOf(item)
+        if (idx !== -1) queue.splice(idx, 1)
+        drain()
       }
-      // Blocked path: enqueue and return a stream that blocks until
-      // the drainer fires. `drain`/`complete` are one-shot resolvers;
-      // both are called at most once.
-      let drain!: () => void
-      let complete!: () => void
-      const drainPromise = new Promise<void>((resolve) => { drain = resolve })
-      const item: QueueItem = {
-        options,
-        next,
-        drain,
-        complete: () => {},
-        enqueuedAt: Date.now(),
-      }
-      queue.push(item)
-      const signal = options.signal
-      if (signal !== undefined) {
-        // Caller cancellation: pull the item out of the queue and
-        // unblock the stream so the inner chain sees the abort and
-        // returns quickly. The agent loop's for-await breaks on the
-        // resulting `done: true`.
-        const onAbort = (): void => {
-          const idx = queue.indexOf(item)
-          if (idx !== -1) queue.splice(idx, 1)
-          drain()
-        }
-        if (signal.aborted) onAbort()
-        else signal.addEventListener('abort', onAbort, { once: true })
-      }
-      return queuedStream(drainPromise, () => complete(), next)
-    }) as unknown as (...args: unknown[]) => unknown)
-    // The `on()` disposer is fiber-scoped via cordis; we also clean
-    // the queue on dispose so a hold never outlives the plugin.
-    ctx.effect(() => () => {
-      disposeLlm()
-      for (const item of queue) item.drain()
-      queue.length = 0
-    }, 'ui-peak-hours: llm gate')
-  } else {
-    ctx.logger?.warn('ui-peak-hours: llm service is unavailable; pause gate will not intercept LLM calls')
-  }
+      if (signal.aborted) onAbort()
+      else signal.addEventListener('abort', onAbort, { once: true })
+    }
+    return queuedStream(drainPromise, () => complete(), next)
+  })
+  // The cordis `on` registration is fiber-scoped: the listener is
+  // released when this plugin's fiber disposes. We also drain any
+  // pending items so a held stream never outlives the plugin.
+  ctx.effect(() => () => {
+    for (const item of queue) item.drain()
+    queue.length = 0
+  }, 'ui-peak-hours: llm gate')
 
   /* === Web routes ========================================================= *
    *  Both routes live in a single `ctx.effect` so one dispose removes
@@ -640,9 +640,9 @@ export function apply(ctx: Context): void {
         }
         isPaused = pausedRaw
         recomputeBlocked()
-        if (settingsScope !== undefined) {
+        if (updateCurrent !== null) {
           try {
-            await settingsScope.update({ paused: pausedRaw })
+            await updateCurrent({ paused: pausedRaw })
           } catch (err) {
             // The host flag has already been flipped above (live semantics:
             // a pause toggle takes effect immediately). Persistence failure
