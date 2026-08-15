@@ -16,12 +16,19 @@
  * The balance is fetched through the host's `/api/peak-hours/balance`
  * route, which resolves the DeepSeek API key server-side. The browser
  * never holds the key; the host returns the JSON envelope directly.
+ *
+ * Usage aggregation walks the host's `/api/peak-hours/usage` endpoint
+ * (a `ctx.sessionPersistence` walk) first, then falls back to the
+ * in-browser trajectory-view walk if the host endpoint is unavailable
+ * (TUI build, transient network blip). The host's response is the
+ * source of truth for the chart's per-day buckets, so the chart
+ * survives a harness relaunch even when the trajectory view is empty.
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { PeakHoursPill } from './PeakHoursPill.tsx'
 import { UsageTooltip } from './UsageTooltip.tsx'
-import type { UsageSummary } from './usage.ts'
+import { fetchHostUsage, type UsageSummary } from './usage.ts'
 import { currentPhase, type Phase } from './domain.ts'
 import { BalanceCache, fetchBalance, type BalanceResult } from './balance.ts'
 import css from './PeakHoursHost.module.css'
@@ -29,7 +36,11 @@ import css from './PeakHoursHost.module.css'
 const RANGE_DAYS = 30
 
 export interface PeakHoursHostProps {
-  /** Per-request aggregation closure; safe to call repeatedly. */
+  /**
+   * Per-request aggregation closure. Used as the fallback when the host
+   * endpoint is unavailable; the browser's trajectory view is built
+   * lazily, so on a cold launch this returns an empty summary.
+   */
   aggregate: (rangeDays: number) => UsageSummary
   /** Subscribe to the sessions list; re-aggregates on each notification. */
   subscribeSessions: (listener: () => void) => () => void
@@ -56,26 +67,60 @@ export function PeakHoursHost(props: PeakHoursHostProps) {
   const [balance, setBalance] = useState<BalanceResult | null>(() => balanceCacheRef.current.value)
   const [balanceLoading, setBalanceLoading] = useState(false)
 
-  // Guard against double-fetch on rapid hover-in/out.
+  // Guard against double-fetch on rapid hover-in/out. The inflight
+  // ref is the single source of truth across `recomputeSummary` and
+  // its inner helpers; the host fetch and the client fallback both
+  // short-circuit on it.
   const summaryInflightRef = useRef(false)
   const balanceInflightRef = useRef(false)
+  // Abort controller for the host fetch. Cancelled when the tooltip
+  // closes so an in-flight GET doesn't leak a setState on a torn-down
+  // component; the next open re-fires.
+  const hostUsageAbortRef = useRef<AbortController | null>(null)
 
-  const recomputeSummary = useCallback(() => {
+  /**
+   * Build a `UsageSummary` for the trailing window. Tries the host
+   * endpoint first (cold-launch source of truth), then falls back to
+   * the in-browser trajectory walk. `fresh=true` adds `?fresh=1` to
+   * bypass the host's 5-min cache; the browser call on a
+   * "new-message" tick uses fresh so the latest day is reflected
+   * within seconds, not at TTL.
+   */
+  const loadSummary = useCallback(async (fresh: boolean): Promise<UsageSummary | null> => {
+    const host = await fetchHostUsage(RANGE_DAYS, fresh, hostUsageAbortRef.current?.signal)
+    if (host !== null) return host
+    // Fallback: the in-browser trajectory walk. Returns an empty
+    // summary on a cold launch (no trajectory view populated), but
+    // it's better than showing "no data" when the host endpoint is
+    // genuinely unavailable (TUI build, network blip).
+    return aggregate(RANGE_DAYS)
+  }, [aggregate])
+
+  const recomputeSummary = useCallback((fresh: boolean = false) => {
     if (summaryInflightRef.current) return
     summaryInflightRef.current = true
     setSummaryLoading(true)
-    // Yield to the event loop so the hover state can render first; the
-    // aggregation itself is synchronous, but a tiny defer keeps the UI
-    // responsive on the first hover of a heavy history.
-    queueMicrotask(() => {
+    // Cancel any previous in-flight host fetch so a fast hover
+    // toggle never races two responses into the same state setter.
+    if (hostUsageAbortRef.current !== null) hostUsageAbortRef.current.abort()
+    const abort = new AbortController()
+    hostUsageAbortRef.current = abort
+    void (async () => {
       try {
-        setSummary(aggregate(RANGE_DAYS))
+        const next = await loadSummary(fresh)
+        // Drop the result if the user closed the tooltip (or a newer
+        // request superseded us) before this fetch resolved.
+        if (hostUsageAbortRef.current !== abort) return
+        setSummary(next)
       } finally {
-        summaryInflightRef.current = false
-        setSummaryLoading(false)
+        if (hostUsageAbortRef.current === abort) {
+          hostUsageAbortRef.current = null
+          summaryInflightRef.current = false
+          setSummaryLoading(false)
+        }
       }
-    })
-  }, [aggregate])
+    })()
+  }, [loadSummary])
 
   const refreshBalance = useCallback(async () => {
     if (balanceInflightRef.current) return
@@ -101,22 +146,32 @@ export function PeakHoursHost(props: PeakHoursHostProps) {
   // Lazy fetch: on first hover, compute summary + balance.
   const onEnter = useCallback(() => {
     setHovered(true)
-    if (summary === null && !summaryLoading) recomputeSummary()
+    if (summary === null && !summaryLoading) recomputeSummary(false)
     if (!balanceLoading) void refreshBalance()
   }, [summary, summaryLoading, recomputeSummary, refreshBalance, balanceLoading])
 
-  const onLeave = useCallback(() => setHovered(false), [])
+  const onLeave = useCallback(() => {
+    setHovered(false)
+    // Cancel any in-flight host fetch so a stale response doesn't
+    // land after the user has moved the cursor away.
+    if (hostUsageAbortRef.current !== null) {
+      hostUsageAbortRef.current.abort()
+      hostUsageAbortRef.current = null
+    }
+  }, [])
 
   // Re-aggregate when the sessions store changes (new session, archived, etc.).
   useEffect(() => {
     if (!hovered) return
-    return subscribeSessions(() => recomputeSummary())
+    return subscribeSessions(() => recomputeSummary(true))
   }, [hovered, subscribeSessions, recomputeSummary])
 
-  // Re-aggregate when a new assistant message lands.
+  // Re-aggregate when a new assistant message lands. `fresh=true`
+  // bypasses the host's 5-min cache so today's bucket reflects the
+  // new tokens within seconds rather than at TTL.
   useEffect(() => {
     if (!hovered || subscribeMessageTick === undefined) return
-    return subscribeMessageTick(() => recomputeSummary())
+    return subscribeMessageTick(() => recomputeSummary(true))
   }, [hovered, subscribeMessageTick, recomputeSummary])
 
   // Keep the tooltip's phase in sync with the live schedule. Cheap

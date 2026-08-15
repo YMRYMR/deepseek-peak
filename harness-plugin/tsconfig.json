@@ -23,6 +23,7 @@
     { "path": "../../host/webserver" },
     { "path": "../../credentials/credentials" },
     { "path": "../../llm/llm" },
-    { "path": "../../settings/settings" }
+    { "path": "../../settings/settings" },
+    { "path": "../../../packages/core/session" }
   ]
 }

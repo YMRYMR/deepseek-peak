@@ -83,11 +83,9 @@ export function phaseLabel(phase: Phase): string {
 
 /**
  * Whether a moment in time falls inside a peak window under the V4
- * schedule. Pre-cutover (before 2026-08-16 16:00 UTC) is treated as
- * off-peak everywhere — the API billed a flat rate, so the
- * "surcharge vs baseline" split is meaningless for those records.
- * Mirrors the rule `costForUsage` uses, so the chart's per-day
- * split agrees with the cost math.
+ * schedule. Pre-cutover is treated as off-peak everywhere (the API
+ * billed a flat rate, so the "surcharge vs baseline" split is
+ * meaningless for those records).
  */
 export function isPeak(atTime: Date): boolean {
   if (atTime.getTime() < CUTOVER_UTC) return false
