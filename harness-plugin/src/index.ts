@@ -296,12 +296,27 @@ const USAGE_ROUTE = '/api/peak-hours/usage'
 /** Cached usage response lifetime. 5 min matches the balance route. */
 const USAGE_CACHE_TTL_MS = 5 * 60 * 1000
 
-/** Per-day bucket shape sent to the browser. Mirrors the client's DailyBucket. */
+/**
+ * Per-day bucket shape sent to the browser. Mirrors the client's DailyBucket.
+ * `byHour` is the per-hour breakdown keyed by UTC hour 0-23, used to
+ * drive the peak/off-peak split in the chart (and available for a
+ * future per-hour visualization). Each hour entry mirrors the day's
+ * shape minus the cost: a flat-rate record would still need a cost
+ * but a per-hour cost is a derivable projection, not a stored fact.
+ */
 interface UsageDailyBucket {
   readonly tokens: number
   readonly peakTokens: number
   readonly cost: number
   readonly messages: number
+  /**
+   * Per-hour breakdown. Hours with zero traffic are omitted (the
+   * `byHour` object has at most 24 keys, typically far fewer). A
+   * missing key means "no events that hour", not "zero events".
+   * Stored as a plain `Record` (not `Readonly`) so the inner
+   * aggregation loop can write to it; the wire payload is unchanged.
+   */
+  readonly byHour: Record<string, { tokens: number; peakTokens: number; messages: number }>
 }
 
 /** Per-model rollup sent to the browser. Mirrors the client's ModelUsage.
@@ -424,68 +439,103 @@ async function aggregateFromPersistence(
   let hadMissing = false
 
   const snapshots = await persistence.listSnapshots(signal)
-  for (const snap of snapshots) {
+  // Inspect every session in parallel batches. The walk is the
+  // dominant cost of a cold-cache `?fresh=1` call: for a harness
+  // with N sessions and an average inspect-time of T ms, the
+  // sequential version is N * T; with bounded concurrency C the
+  // ceiling is N/C * T (plus the per-batch await overhead). 8
+  // in flight saturates local I/O without exhausting the event
+  // loop on the smaller rangeDays windows. The processing pass
+  // (per-event bucket writes) stays single-threaded because it
+  // only touches in-memory maps.
+  const INSPECT_CONCURRENCY = 8
+  type InspectResult = ReadonlyArray<{ type: string; time: number; data: unknown }> | null
+  for (let i = 0; i < snapshots.length; i += INSPECT_CONCURRENCY) {
     if (signal?.aborted === true) throw new Error('aborted')
-    const id = snap.header.id
-    let events: ReadonlyArray<{ type: string; time: number; data: unknown }>
-    try {
-      const inspection = await persistence.inspect(id, signal)
-      events = inspection.events
-    } catch {
-      hadMissing = true
-      continue
-    }
-    for (const event of events) {
-      if (event.type !== 'assistant/message') continue
-      if (event.time < rangeStart || event.time >= rangeEnd + DAY_MS_USAGE) continue
-      if (!isAssistantMessageEvent(event.data)) continue
-      const model = event.data.message.source.model
-      const rawUsage = event.data.usage as
-        { inputTokens: number; outputTokens: number; cacheReadTokens?: number } | undefined
-      const tokens = readUsageTokens(rawUsage)
-      if (tokens === null) continue
-      const atTime = new Date(event.time)
-      const dayStr = atTime.toISOString().slice(0, 10)
-      const peakTokens = isPeak(atTime) ? tokens : 0
-      // Compute USD cost from the same per-message usage that the
-      // client uses (`costForUsage` lives in `src/client/pricing.ts`
-      // and is shared so the chart's per-day totals and the live
-      // balance both come from the same rate table). Non-DeepSeek
-      // models return 0 from `costForUsage`, which is the documented
-      // behavior — those buckets still count tokens, just at $0.
-      const cost = rawUsage === undefined
-        ? 0
-        : costForUsage(
-          model,
-            {
-              input: rawUsage.inputTokens,
-              cacheRead: rawUsage.cacheReadTokens ?? 0,
-              output: rawUsage.outputTokens,
-            } satisfies PricingUsage,
-            atTime,
-        )
-      let modelMap = bucketsByModel.get(model)
-      if (modelMap === undefined) { modelMap = new Map(); bucketsByModel.set(model, modelMap) }
-      const existing = modelMap.get(dayStr)
-      if (existing === undefined) {
-        modelMap.set(dayStr, { tokens, peakTokens, cost, messages: 1 })
-      } else {
-        modelMap.set(dayStr, {
-          tokens: existing.tokens + tokens,
-          peakTokens: existing.peakTokens + peakTokens,
-          cost: existing.cost + cost,
-          messages: existing.messages + 1,
-        })
+    const batch = snapshots.slice(i, i + INSPECT_CONCURRENCY)
+    const results: InspectResult[] = await Promise.all(batch.map(async (snap): Promise<InspectResult> => {
+      try {
+        const inspection = await persistence.inspect(snap.header.id, signal)
+        return inspection.events
+      } catch {
+        return null
       }
-      const totals = totalsByModel.get(model) ?? { tokens: 0, cost: 0, messages: 0 }
-      totals.tokens += tokens
-      totals.cost += cost
-      totals.messages += 1
-      totalsByModel.set(model, totals)
-      totalTokens += tokens
-      totalCost += cost
-      totalMessages += 1
-      if (firstRecordMs === null || event.time < firstRecordMs) firstRecordMs = event.time
+    }))
+    for (const events of results) {
+      if (events === null) { hadMissing = true; continue }
+      for (const event of events) {
+        if (event.type !== 'assistant/message') continue
+        if (event.time < rangeStart || event.time >= rangeEnd + DAY_MS_USAGE) continue
+        if (!isAssistantMessageEvent(event.data)) continue
+        const model = event.data.message.source.model
+        const rawUsage = event.data.usage as
+          { inputTokens: number; outputTokens: number; cacheReadTokens?: number } | undefined
+        const tokens = readUsageTokens(rawUsage)
+        if (tokens === null) continue
+        const atTime = new Date(event.time)
+        const dayStr = atTime.toISOString().slice(0, 10)
+        const peakTokens = isPeak(atTime) ? tokens : 0
+        // Compute USD cost from the same per-message usage that the
+        // client uses (`costForUsage` lives in `src/client/pricing.ts`
+        // and is shared so the chart's per-day totals and the live
+        // balance both come from the same rate table). Non-DeepSeek
+        // models return 0 from `costForUsage`, which is the documented
+        // behavior — those buckets still count tokens, just at $0.
+        const cost = rawUsage === undefined
+          ? 0
+          : costForUsage(
+            model,
+              {
+                input: rawUsage.inputTokens,
+                cacheRead: rawUsage.cacheReadTokens ?? 0,
+                output: rawUsage.outputTokens,
+              } satisfies PricingUsage,
+              atTime,
+          )
+        // Per-hour attribution: bucketed on the UTC hour of the event
+        // (0-23), independent of day. The hour is stored alongside the
+        // day so the chart can render either a per-day split (the
+        // current view) or, in a future iteration, a per-hour
+        // breakdown of a selected day. Hours with zero traffic are
+        // omitted from the `byHour` Record; a missing key means
+        // "no events", never "zero events".
+        const hourStr = String(atTime.getUTCHours())
+        let modelMap = bucketsByModel.get(model)
+        if (modelMap === undefined) { modelMap = new Map(); bucketsByModel.set(model, modelMap) }
+        const existing = modelMap.get(dayStr)
+        if (existing === undefined) {
+          const byHour: Record<string, { tokens: number; peakTokens: number; messages: number }> = {}
+          byHour[hourStr] = { tokens, peakTokens, messages: 1 }
+          modelMap.set(dayStr, { tokens, peakTokens, cost, messages: 1, byHour })
+        } else {
+          const hourBucket = existing.byHour[hourStr]
+          if (hourBucket === undefined) {
+            existing.byHour[hourStr] = { tokens, peakTokens, messages: 1 }
+          } else {
+            existing.byHour[hourStr] = {
+              tokens: hourBucket.tokens + tokens,
+              peakTokens: hourBucket.peakTokens + peakTokens,
+              messages: hourBucket.messages + 1,
+            }
+          }
+          modelMap.set(dayStr, {
+            tokens: existing.tokens + tokens,
+            peakTokens: existing.peakTokens + peakTokens,
+            cost: existing.cost + cost,
+            messages: existing.messages + 1,
+            byHour: existing.byHour,
+          })
+        }
+        const totals = totalsByModel.get(model) ?? { tokens: 0, cost: 0, messages: 0 }
+        totals.tokens += tokens
+        totals.cost += cost
+        totals.messages += 1
+        totalsByModel.set(model, totals)
+        totalTokens += tokens
+        totalCost += cost
+        totalMessages += 1
+        if (firstRecordMs === null || event.time < firstRecordMs) firstRecordMs = event.time
+      }
     }
   }
 
