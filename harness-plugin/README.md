@@ -96,6 +96,71 @@ the rest of the surface keeps working. There is no settings form in
 the browser to enter the key — by design, so a typo can never leak a
 key the user did not intend to share with the page.
 
+## Historical usage on cold launch
+
+The per-day usage chart reads from
+`GET /api/peak-hours/usage?rangeDays=30`, also served by the host
+face. The host walks `ctx.sessionPersistence` (the durable event log
+every session is already flushed to) and aggregates the per-model
+`assistant/message` events into the same `UsageSummary` shape the
+client already understands. The browser tries the host endpoint
+first, then falls back to its in-tab trajectory walk if the host
+returns nothing (TUI build, transient network blip). The host
+response is the source of truth, so the chart shows real data on
+the first hover of a fresh harness launch.
+
+```
+Browser                          Host (this package's src/index.ts)
+───────                          ─────────────────────────────────
+hover the pill
+  → fetch('/api/peak-hours/usage?rangeDays=30[&fresh=1]')
+    ── HTTP GET (same-origin) ──►
+                                  ctx.sessionPersistence.listSnapshots()
+                                  for each session:
+                                    ctx.sessionPersistence.inspect(id)
+                                      filter assistant/message events
+                                      bucket per-model per-day
+                                  cache (5 min, keyed by rangeDays) → JSON
+    ◄── JSON ──
+  → render
+```
+
+`?fresh=1` bypasses the host's 5-min cache so a "new message landed"
+tick in the browser can see fresh data within seconds. The cache is
+keyed by `rangeDays` so a 7-day and a 30-day window do not shadow
+each other.
+
+The wire mirrors the client's `UsageSummary` shape:
+
+```ts
+type UsageEnvelope =
+  | { ok: true;  summary: {
+        rangeDays: number,
+        rangeStartUtc: number,  // epoch ms
+        rangeEndUtc: number,    // epoch ms
+        models: Array<{
+          model: string,
+          daily: Record<string, { tokens: number, peakTokens: number,
+                                  cost: number,    messages: number }>,
+          totalTokens: number,
+          totalCost: number,
+          totalMessages: number,
+        }>,
+        totalTokens: number,
+        totalCost: number,
+        totalMessages: number,
+        firstRecordMs: number | null,
+        hadMissing: boolean,
+    } }
+  | { ok: false; error: { kind: 'unavailable' | 'invalid', message: string } }
+```
+
+The `daily` field is a `Record` (Maps don't survive `JSON.stringify`).
+The client rehydrates each model's `daily` into a `Map` after the
+fetch. `cost` is computed host-side from the same `costForUsage` the
+client uses, so the per-day buckets and any future dollar total
+agree on rates.
+
 ## Pause during peak
 
 A small switch lives inside the pill, on the right. When ON and the
@@ -245,12 +310,13 @@ loaded as a cordis plugin by the row, and the browser face
 (`src/client/`) is composed into `window.__DSH_BOOT__` by the modules
 node half through the package's `dsh.client` declaration.
 
-The host face needs four services — `credentials`, `webServer`, `llm`,
-and `settings` — all standard in the Web bundle. If any is missing the
-affected surface degrades without throwing: the balance row answers
-`unavailable`, the pause switch reads/writes an in-process boolean
-instead of a persisted setting, the LLM gate skips its hook, and the
-state route still answers a JSON envelope. The whole plugin
+The host face needs five services — `credentials`, `webServer`, `llm`,
+`settings`, and `sessionPersistence` — all standard in the Web bundle.
+If any is missing the affected surface degrades without throwing:
+the balance row answers `unavailable`, the pause switch reads/writes
+an in-process boolean instead of a persisted setting, the LLM gate
+skips its hook, the usage route answers an `unavailable` envelope,
+and the state route still answers a JSON envelope. The whole plugin
 intentionally never crashes the harness on a missing service.
 
 The overlay depends on the `sessions` Cordis service (the same one the
@@ -261,16 +327,21 @@ lists `['slots', 'sessions']`.
 
 | Source | Used for |
 | ------ | -------- |
-| `ctx.sessions.list` | Enumerate all session ids. |
-| `ctx.sessions.binding(id).session.getSnapshot().views.get('trajectory').eventNodes` | Per-session assistant-message nodes; each carries `usage: { inputTokens, cacheReadTokens, outputTokens }` and `provenance.model`. |
+| `ctx.sessionPersistence.listSnapshots()` + `.inspect(id)` (host) | Per-session `assistant/message` event log. Source of truth for the chart; survives harness restarts. |
+| `ctx.sessions.list` (browser, fallback) | Enumerate session ids for the in-tab trajectory walk when the host endpoint is unavailable. |
+| `ctx.sessions.binding(id).session.getSnapshot().views.get('trajectory').eventNodes` (browser, fallback) | Per-session assistant-message nodes when the host endpoint is unavailable. Each carries `usage: { inputTokens, cacheReadTokens, outputTokens }` and `provenance.model`. |
 | Browser clock | Phase determination. |
 | Host `GET /api/peak-hours/balance` (this package's host face) | Live account balance. |
+| Host `GET /api/peak-hours/usage` (this package's host face) | Historical usage rolled up from `ctx.sessionPersistence`. |
 | `ctx.credentials.resolve('DEEPSEEK_API_KEY')` (host) | Server-side API key. Never reaches the browser. |
 | `launchEnvironmentOf(ctx).get('DEEPSEEK_API_KEY')` (host, fallback) | Environment-variable fallback. Never reaches the browser. |
 
-The aggregation walks the trajectory view snapshot per session; cost is
-computed lazily per record. Cache invalidation re-fires on each
-`sessions.list` notification and on every new assistant message.
+The chart prefers the host's `usage` endpoint; if it is unavailable
+the browser falls back to the trajectory-view walk. Cost is computed
+host-side from the same `costForUsage` the browser uses. Cache
+invalidation re-fires on each `sessions.list` notification and on
+every new assistant message (`?fresh=1` bypasses the host's 5-min
+cache).
 
 ## Model Experience
 
@@ -297,11 +368,11 @@ assembled request.
   system clock against UTC windows. A user with a mis-set clock will see
   a misleading status. A future iteration could expose a `useEffect`
   fetch of `worldtimeapi.org` for a sanity check.
-- **Trajectory view load** — the aggregation depends on each session's
-  trajectory view having been built. Sessions that have never been opened
-  in the trajectory tab may have a `EMPTY_TRAJECTORY_SNAPSHOT` and
-  contribute no records. The chart will show `partial` in the header if
-  any session was unreachable.
+- **Host-side session walk** — the host's `usage` route walks every
+  persisted session on a cache miss; for harnesses with thousands of
+  sessions this is a measurable walk. The 5-min cache absorbs repeated
+  hovers; a future iteration can add a rolling aggregate written
+  alongside the persistence log.
 - **Single-currency balance row** — the tooltip renders the first
   `balance_infos[]` entry. DeepSeek's response shape can carry more
   than one currency; a future iteration can show all of them in a

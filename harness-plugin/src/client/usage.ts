@@ -87,6 +87,8 @@ export interface UsageSummary {
 
 const DAY_MS = 24 * 60 * 60 * 1000
 
+const DEFAULT_RANGE_DAYS = 30
+
 /**
  * Walk all sessions in the harness, harvest every assistant message with
  * `usage` + `provenance.model`, and bucket them into per-model daily totals
@@ -221,4 +223,157 @@ export function formatTokensFull(value: number): string {
   // Insert a dot every 3 digits from the right. Locale-free so the
   // shape is stable regardless of the browser's user-locale.
   return rounded.toString().replace(/\B(?=(\d{3})+(?!\d))/g, '.')
+}
+
+/* -------------------------------------------------------------------------- *
+ *  Host-fetched usage (cold-launch / cross-session source of truth)
+ * -------------------------------------------------------------------------- *
+ *
+ * The local `aggregateUsage` walks the trajectory view in the browser,
+ * which is built lazily and stays at EMPTY_TRAJECTORY_SNAPSHOT for any
+ * session the user has not opened in the trajectory tab. On a cold
+ * harness launch that means the chart starts from scratch even when
+ * the persistence log has 30 days of events.
+ *
+ * The host face serves `GET /api/peak-hours/usage?rangeDays=N` from
+ * `ctx.sessionPersistence`, the durable event log. The endpoint is
+ * same-origin and returns the same `UsageSummary` shape the client
+ * already understands, with the per-day `Map` rehydrated from a JSON
+ * object. Callers fall back to `aggregateUsage` when this returns
+ * `null` (host endpoint not yet registered, or transient failure).
+ *
+ * The host caches the response for 5 min. The `fresh` argument adds
+ * `?fresh=1` to bypass the cache so a "new message landed" tick can
+ * see the latest data without waiting for TTL.
+ */
+
+const USAGE_ENDPOINT = '/api/peak-hours/usage'
+
+/**
+ * Fetch the trailing-N-day usage summary from the host's persistence
+ * proxy. Returns `null` for any failure (network, parse, host
+ * `ok: false` envelope) so callers can fall back to the in-browser
+ * walk without surfacing a hard error.
+ *
+ * The browser never holds a DeepSeek key for this; the host reads
+ * only the persisted event log.
+ *
+ * @param rangeDays - how many trailing UTC days to include (default 30).
+ * @param fresh - true to bypass the host's 5-min cache. Use this on
+ *                "new assistant message" ticks so the latest day is
+ *                reflected within seconds rather than at TTL.
+ * @param signal - optional AbortSignal; the host's fetch is cancelled
+ *                 when the caller's chart closes mid-flight.
+ */
+export async function fetchHostUsage(
+  rangeDays: number = 30,
+  fresh: boolean = false,
+  signal?: AbortSignal,
+): Promise<UsageSummary | null> {
+  const params = new URLSearchParams({ rangeDays: String(rangeDays) })
+  if (fresh) params.set('fresh', '1')
+  let response: Response
+  try {
+    response = await fetch(`${USAGE_ENDPOINT}?${params.toString()}`, {
+      method: 'GET',
+      headers: { 'Accept': 'application/json' },
+      // Same-origin GET. The host always answers 200 with a JSON
+      // envelope; anything else is a wire surprise we translate to
+      // a transient failure.
+      signal: signal ?? AbortSignal.timeout(10_000),
+    })
+  } catch (err) {
+    if (typeof console !== 'undefined') {
+      console.warn('[peak-hours] host usage fetch failed:', err instanceof Error ? err.message : String(err))
+    }
+    return null
+  }
+  if (!response.ok) {
+    if (typeof console !== 'undefined') {
+      console.warn(`[peak-hours] host usage fetch returned HTTP ${response.status}`)
+    }
+    return null
+  }
+  let body: unknown
+  try {
+    body = await response.json()
+  } catch (err) {
+    if (typeof console !== 'undefined') {
+      console.warn('[peak-hours] host usage fetch returned invalid JSON:', err instanceof Error ? err.message : String(err))
+    }
+    return null
+  }
+  return parseHostUsageEnvelope(body)
+}
+
+/**
+ * Validate the host's JSON envelope and rehydrate the wire shape into
+ * the client's `UsageSummary`. The host's `daily` field is a
+ * `Record<string, DailyBucket>` (Map serializes to a plain object over
+ * JSON); we rebuild the Map here. Defensive: any shape drift becomes
+ * `null` so the caller can fall back.
+ */
+function parseHostUsageEnvelope(body: unknown): UsageSummary | null {
+  if (body === null || typeof body !== 'object') return null
+  const env = body as Record<string, unknown>
+  if (env.ok !== true) return null
+  const raw = env.summary
+  if (raw === null || typeof raw !== 'object') return null
+  const s = raw as Record<string, unknown>
+  const rangeDays = asPositiveInt(s.rangeDays) ?? DEFAULT_RANGE_DAYS
+  const rangeStartMs = asNumber(s.rangeStartUtc)
+  const rangeEndMs = asNumber(s.rangeEndUtc)
+  if (rangeStartMs === null || rangeEndMs === null) return null
+  const rawModels = s.models
+  if (!Array.isArray(rawModels)) return null
+
+  const models: ModelUsage[] = []
+  for (const rawModel of rawModels) {
+    if (rawModel === null || typeof rawModel !== 'object') continue
+    const m = rawModel as Record<string, unknown>
+    const modelId = typeof m.model === 'string' ? m.model : ''
+    if (modelId.length === 0) continue
+    const daily = new Map<string, DailyBucket>()
+    const rawDaily = m.daily
+    if (rawDaily !== null && typeof rawDaily === 'object') {
+      for (const [dayStr, bucket] of Object.entries(rawDaily as Record<string, unknown>)) {
+        if (bucket === null || typeof bucket !== 'object') continue
+        const b = bucket as Record<string, unknown>
+        const tokens = asNumber(b.tokens)
+        const messages = asNumber(b.messages)
+        if (tokens === null || messages === null) continue
+        const peakTokens = asNumber(b.peakTokens) ?? 0
+        const cost = asNumber(b.cost) ?? 0
+        daily.set(dayStr, { date: dayStr, tokens, peakTokens, cost, messages })
+      }
+    }
+    const totalTokens = asNumber(m.totalTokens) ?? 0
+    const totalCost = asNumber(m.totalCost) ?? 0
+    const messageCount = asNumber(m.totalMessages) ?? 0
+    models.push({ model: modelId, daily, totalTokens, totalCost, messageCount })
+  }
+  models.sort((a, b) => b.totalTokens - a.totalTokens)
+
+  const totalTokens = asNumber(s.totalTokens) ?? 0
+  const totalCost = asNumber(s.totalCost) ?? 0
+  const totalMessages = asNumber(s.totalMessages) ?? 0
+  const firstRecordMs = asNumber(s.firstRecordMs)  // null or number
+  const hadMissing = s.hadMissing === true
+
+  return {
+    rangeDays,
+    rangeStartUtc: new Date(rangeStartMs),
+    rangeEndUtc: new Date(rangeEndMs),
+    models,
+    totalTokens,
+    totalCost,
+    totalMessages,
+    firstRecordMs,
+    hadMissing,
+  }
+}
+
+function asPositiveInt(value: unknown): number | null {
+  const n = asNumber(value)
+  return n === null || n <= 0 || !Number.isInteger(n) ? null : n
 }

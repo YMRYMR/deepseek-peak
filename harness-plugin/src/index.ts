@@ -71,19 +71,20 @@ import type { GenerateOptions, StreamChunk } from '@deepseek-ai/dsh-llm'
 // is type-checked against the carrier's exact handler signature.
 import type { WebServer } from '@deepseek-ai/dsh-host-webserver'
 import z from '@deepseek-ai/schemastery'
-import { currentPhase, type Phase, type PhaseSnapshot } from './phase.ts'
+import { currentPhase, isPeak, type Phase, type PhaseSnapshot } from './phase.ts'
+import { costForUsage, type TokenUsage as PricingUsage } from './client/pricing.ts'
 
 /** Cordis plugin name used by loader diagnostics. */
 export const name = 'ui-peak-hours'
 
 /**
- * The host face reads four services. They are declared in `inject` so the
+ * The host face reads five services. They are declared in `inject` so the
  * cordis fiber waits for activation; at the call site each is still checked
  * for `undefined` because a deployment that omits one (e.g. a TUI build that
  * does not register the credentials seam) must not crash the plugin — it
  * degrades the affected surface to a documented error envelope instead.
  */
-export const inject = ['credentials', 'webServer', 'llm', 'settings'] as const
+export const inject = ['credentials', 'webServer', 'llm', 'settings', 'sessionPersistence'] as const
 
 /* -------------------------------------------------------------------------- *
  *  Balance proxy (existing route, unchanged wire shape)
@@ -262,6 +263,262 @@ async function fetchUpstream(apiKey: string): Promise<BalanceJson> {
     }
   }
   return parseBalance(body)
+}
+
+/* -------------------------------------------------------------------------- *
+ *  Usage aggregation proxy (read from session persistence on the host)
+ * -------------------------------------------------------------------------- *
+ *
+ * The trajectory view in the browser is built lazily — a session that
+ * was never opened in the trajectory tab has an EMPTY_TRAJECTORY_SNAPSHOT,
+ * and the browser's per-day usage aggregation reads from that view and
+ * finds nothing. That makes the chart start from scratch on every
+ * harness relaunch: the persisted session events are still on disk,
+ * but nothing asks the trajectory view to rebuild.
+ *
+ * The host has the `ctx.sessionPersistence` service, which is the
+ * durable source of every session's event log. This route walks every
+ * persisted session in the requested window, filters to
+ * `assistant/message` events, and aggregates the per-day usage
+ * per-model. The result mirrors the browser's `UsageSummary` shape
+ * (minus the cost field, which the client computes locally from
+ * per-day totals) so the chart can use the data with no extra
+ * client-side work.
+ *
+ * Caching: the response is cached in-memory for `USAGE_CACHE_TTL_MS`
+ * (5 min) keyed on the range. Sessions are walked only on a cache
+ * miss; a long-running harness hits the cache for the second-and-
+ * later hover in the same window.
+ */
+
+const USAGE_ROUTE = '/api/peak-hours/usage'
+
+/** Cached usage response lifetime. 5 min matches the balance route. */
+const USAGE_CACHE_TTL_MS = 5 * 60 * 1000
+
+/** Per-day bucket shape sent to the browser. Mirrors the client's DailyBucket. */
+interface UsageDailyBucket {
+  readonly tokens: number
+  readonly peakTokens: number
+  readonly cost: number
+  readonly messages: number
+}
+
+/** Per-model rollup sent to the browser. Mirrors the client's ModelUsage.
+ *  Note: `daily` is a plain `Record`, not a `Map`, because `JSON.stringify`
+ *  serializes `Map` instances as `{}` (Maps have no own enumerable
+ *  properties for their entries). The client rehydrates the `Record`
+ *  back to a `Map` after the fetch. */
+interface UsageModelRollup {
+  readonly model: string
+  readonly daily: Readonly<Record<string, UsageDailyBucket>>
+  readonly totalTokens: number
+  readonly totalCost: number
+  readonly totalMessages: number
+}
+
+interface UsageSummaryJson {
+  readonly ok: true
+  readonly summary: {
+    readonly rangeDays: number
+    readonly rangeStartUtc: number
+    readonly rangeEndUtc: number
+    readonly models: readonly UsageModelRollup[]
+    readonly totalTokens: number
+    readonly totalCost: number
+    readonly totalMessages: number
+    readonly firstRecordMs: number | null
+    readonly hadMissing: boolean
+  }
+}
+
+interface UsageSummaryError {
+  readonly ok: false
+  readonly error: { readonly kind: 'unavailable' | 'invalid'; readonly message: string }
+}
+
+type UsageResponse = UsageSummaryJson | UsageSummaryError
+
+interface CachedUsage {
+  readonly result: UsageResponse
+  readonly fetchedAt: number
+}
+
+const DAY_MS_USAGE = 24 * 60 * 60 * 1000
+const DEFAULT_RANGE_DAYS = 30
+const MAX_RANGE_DAYS = 365
+
+function parseRangeDays(raw: string | string[] | undefined): number {
+  if (raw === undefined) return DEFAULT_RANGE_DAYS
+  const value = Array.isArray(raw) ? raw[0] : raw
+  if (value === undefined) return DEFAULT_RANGE_DAYS
+  const n = Number.parseInt(value, 10)
+  if (!Number.isFinite(n) || n <= 0) return DEFAULT_RANGE_DAYS
+  return Math.min(MAX_RANGE_DAYS, n)
+}
+
+/** The session-persistence service exposes the durable event log for
+ *  every session. Walking the log here gives the chart a stable
+ *  aggregate that survives harness restarts (the browser's
+ *  trajectory view is built lazily and is empty on a cold launch). */
+interface SessionPersistenceService {
+  listSnapshots(signal?: AbortSignal): Promise<ReadonlyArray<{ readonly header: { readonly id: unknown } }>>
+  inspect(id: unknown, signal?: AbortSignal): Promise<{
+    readonly meta: unknown
+    readonly events: ReadonlyArray<{
+      readonly type: string
+      readonly time: number
+      readonly data: unknown
+    }>
+  }>
+}
+
+function isAssistantMessageEvent(data: unknown): data is {
+  turn: number
+  step: number
+  message: { readonly source: { readonly provider: string; readonly model: string } }
+  usage?: { readonly inputTokens: number; readonly outputTokens: number; readonly cacheReadTokens?: number }
+} {
+  if (data === null || typeof data !== 'object') return false
+  const d = data as Record<string, unknown>
+  if (typeof d.turn !== 'number') return false
+  if (typeof d.step !== 'number') return false
+  const message = d.message
+  if (message === null || typeof message !== 'object') return false
+  const source = (message as Record<string, unknown>).source
+  if (source === null || typeof source !== 'object') return false
+  const s = source as Record<string, unknown>
+  return typeof s.provider === 'string' && typeof s.model === 'string'
+    && s.model.length > 0
+}
+
+function readUsageTokens(usage: { inputTokens: number; outputTokens: number } | undefined): number | null {
+  if (usage === undefined) return null
+  const input = Number(usage.inputTokens)
+  const output = Number(usage.outputTokens)
+  if (!Number.isFinite(input) || !Number.isFinite(output)) return null
+  if (input < 0 || output < 0) return null
+  return input + output
+}
+
+async function aggregateFromPersistence(
+  ctx: Context,
+  rangeDays: number,
+  signal?: AbortSignal,
+): Promise<UsageSummaryJson['summary']> {
+  const persistence = ctx.get('sessionPersistence') as SessionPersistenceService | undefined
+  if (persistence === undefined) {
+    throw new Error('session-persistence service is unavailable')
+  }
+  const now = Date.now()
+  const todayUtcMidnight = Math.floor(now / DAY_MS_USAGE) * DAY_MS_USAGE
+  const rangeStart = todayUtcMidnight - (rangeDays - 1) * DAY_MS_USAGE
+  const rangeEnd = todayUtcMidnight
+
+  const bucketsByModel = new Map<string, Map<string, UsageDailyBucket>>()
+  const totalsByModel = new Map<string, { tokens: number; cost: number; messages: number }>()
+  let totalTokens = 0
+  let totalCost = 0
+  let totalMessages = 0
+  let firstRecordMs: number | null = null
+  let hadMissing = false
+
+  const snapshots = await persistence.listSnapshots(signal)
+  for (const snap of snapshots) {
+    if (signal?.aborted === true) throw new Error('aborted')
+    const id = snap.header.id
+    let events: ReadonlyArray<{ type: string; time: number; data: unknown }>
+    try {
+      const inspection = await persistence.inspect(id, signal)
+      events = inspection.events
+    } catch {
+      hadMissing = true
+      continue
+    }
+    for (const event of events) {
+      if (event.type !== 'assistant/message') continue
+      if (event.time < rangeStart || event.time >= rangeEnd + DAY_MS_USAGE) continue
+      if (!isAssistantMessageEvent(event.data)) continue
+      const model = event.data.message.source.model
+      const rawUsage = event.data.usage as
+        { inputTokens: number; outputTokens: number; cacheReadTokens?: number } | undefined
+      const tokens = readUsageTokens(rawUsage)
+      if (tokens === null) continue
+      const atTime = new Date(event.time)
+      const dayStr = atTime.toISOString().slice(0, 10)
+      const peakTokens = isPeak(atTime) ? tokens : 0
+      // Compute USD cost from the same per-message usage that the
+      // client uses (`costForUsage` lives in `src/client/pricing.ts`
+      // and is shared so the chart's per-day totals and the live
+      // balance both come from the same rate table). Non-DeepSeek
+      // models return 0 from `costForUsage`, which is the documented
+      // behavior — those buckets still count tokens, just at $0.
+      const cost = rawUsage === undefined
+        ? 0
+        : costForUsage(
+          model,
+            {
+              input: rawUsage.inputTokens,
+              cacheRead: rawUsage.cacheReadTokens ?? 0,
+              output: rawUsage.outputTokens,
+            } satisfies PricingUsage,
+            atTime,
+        )
+      let modelMap = bucketsByModel.get(model)
+      if (modelMap === undefined) { modelMap = new Map(); bucketsByModel.set(model, modelMap) }
+      const existing = modelMap.get(dayStr)
+      if (existing === undefined) {
+        modelMap.set(dayStr, { tokens, peakTokens, cost, messages: 1 })
+      } else {
+        modelMap.set(dayStr, {
+          tokens: existing.tokens + tokens,
+          peakTokens: existing.peakTokens + peakTokens,
+          cost: existing.cost + cost,
+          messages: existing.messages + 1,
+        })
+      }
+      const totals = totalsByModel.get(model) ?? { tokens: 0, cost: 0, messages: 0 }
+      totals.tokens += tokens
+      totals.cost += cost
+      totals.messages += 1
+      totalsByModel.set(model, totals)
+      totalTokens += tokens
+      totalCost += cost
+      totalMessages += 1
+      if (firstRecordMs === null || event.time < firstRecordMs) firstRecordMs = event.time
+    }
+  }
+
+  const models: UsageModelRollup[] = []
+  for (const [model, totals] of totalsByModel) {
+    const modelMap = bucketsByModel.get(model) ?? new Map<string, UsageDailyBucket>()
+    // JSON.stringify would emit `{}` for a Map (Maps have no own
+    // enumerable properties for their entries); flatten to a
+    // `Record<date, bucket>` so the client sees the per-day data
+    // intact and rehydrates into a Map locally.
+    const daily: Record<string, UsageDailyBucket> = {}
+    for (const [dayStr, bucket] of modelMap) daily[dayStr] = bucket
+    models.push({
+      model,
+      daily,
+      totalTokens: totals.tokens,
+      totalCost: totals.cost,
+      totalMessages: totals.messages,
+    })
+  }
+  models.sort((left, right) => right.totalTokens - left.totalTokens)
+
+  return {
+    rangeDays,
+    rangeStartUtc: rangeStart,
+    rangeEndUtc: rangeEnd,
+    models,
+    totalTokens,
+    totalCost,
+    totalMessages,
+    firstRecordMs,
+    hadMissing,
+  }
 }
 
 /* -------------------------------------------------------------------------- *
@@ -684,14 +941,64 @@ export function apply(ctx: Context): void {
       },
     })
 
+    /* -- Usage aggregation proxy (new) -------------------------------- */
+    // Cache is keyed by `rangeDays` so a `?rangeDays=7` and a
+    // `?rangeDays=30` don't shadow each other; the value is the
+    // cached response + the time it was walked. `?fresh=1` is a
+    // per-request cache-buster for the "new message landed" tick.
+    const usageCache = new Map<number, CachedUsage>()
+    const parseUsagePath = (reqUrl: string | undefined): { rangeDays: number; fresh: boolean } => {
+      if (reqUrl === undefined) return { rangeDays: DEFAULT_RANGE_DAYS, fresh: false }
+      try {
+        const url = new URL(reqUrl, 'http://x')
+        const rangeDays = parseRangeDays(url.searchParams.get('rangeDays') ?? undefined)
+        const fresh = url.searchParams.get('fresh') === '1'
+        return { rangeDays, fresh }
+      } catch {
+        return { rangeDays: DEFAULT_RANGE_DAYS, fresh: false }
+      }
+    }
+    const disposeUsageRoute = webServer.register({
+      kind: 'exact',
+      path: USAGE_ROUTE,
+      handler: async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
+        if (!isReadMethod(req.method)) {
+          res.writeHead(405, { allow: 'GET, HEAD' })
+          res.end()
+          return
+        }
+        const { rangeDays, fresh } = parseUsagePath(req.url)
+        if (!fresh) {
+          const cached = usageCache.get(rangeDays)
+          if (cached !== undefined && Date.now() - cached.fetchedAt < USAGE_CACHE_TTL_MS) {
+            writeJson(res, 200, cached.result)
+            return
+          }
+        }
+        try {
+          const summary = await aggregateFromPersistence(ctx, rangeDays)
+          const ok: UsageSummaryJson = { ok: true, summary }
+          usageCache.set(rangeDays, { result: ok, fetchedAt: Date.now() })
+          writeJson(res, 200, ok)
+        } catch (err) {
+          ctx.logger?.warn(`ui-peak-hours: usage aggregation failed: ${err instanceof Error ? err.message : String(err)}`)
+          const failure: UsageResponse = { ok: false, error: { kind: 'unavailable', message: 'host-side usage aggregation failed' } }
+          // Do NOT cache failures — the next browser poll should try again
+          writeJson(res, 200, failure)
+        }
+      },
+    })
+
     ctx.effect(() => () => {
       disposeBalanceRoute()
       disposeStateRoute()
+      disposeUsageRoute()
       if (balanceRefreshTimer !== null) {
         clearTimeout(balanceRefreshTimer)
         balanceRefreshTimer = null
       }
       balanceCached = null
+      usageCache.clear()
     }, 'ui-peak-hours: routes')
   }
 
