@@ -89,18 +89,44 @@
   pointer-events: none;
 }
 
-/* Right-side meta: a single subdued "Last N days" label that sits at
- * the same baseline as the balance row, so the header reads as one
- * horizontal line. */
+/* Right-side meta: a small "Top up" pill that links to the platform
+ * top-up page. Sits at the same baseline as the balance row. The
+ * parent header has `pointer-events: none` so the tooltip doesn't
+ * intercept host-level hover; this rule re-enables clicks on the
+ * pill itself. Visual weight matches the surrounding label rhythm
+ * (9px, 0.55 opacity) but the border + uppercase distinguishes it
+ * as actionable. The screen-reader text is "Top up" (sentence case
+ * for clean a11y); the uppercase is purely a visual treatment. */
 .headerMeta {
   font-size: 9px;
   font-weight: 500;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
   color: currentColor;
-  opacity: 0.55;
+  opacity: 0.65;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
   flex: 0 0 auto;
+  pointer-events: auto;
+  text-decoration: none;
+  padding: 2px 7px;
+  border: 1px solid color-mix(in srgb, currentColor 35%, transparent);
+  border-radius: 3px;
+  cursor: pointer;
+  transition: opacity 120ms ease, background 120ms ease, border-color 120ms ease;
+}
+.headerMeta:hover {
+  opacity: 1;
+  background: color-mix(in srgb, currentColor 10%, transparent);
+  border-color: color-mix(in srgb, currentColor 60%, transparent);
+}
+.headerMeta:focus-visible {
+  opacity: 1;
+  outline: 1px solid currentColor;
+  outline-offset: 1px;
+}
+.headerMeta:active {
+  transform: translateY(0.5px);
 }
 
 /* Balance row: a single horizontal strip above the spent-line subtitle.
