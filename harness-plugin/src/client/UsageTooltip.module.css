@@ -42,6 +42,20 @@
   animation: fadeIn 140ms ease-out;
 }
 
+/* Wrapper-mode variant: the host's `.hover` container owns the absolute
+ * positioning, so the card is normal-flow and stacks with the queue
+ * card below it. The `css.card` body styling (background, border,
+ * padding, etc.) is kept; only the positioning is overridden. The
+ * `width: 100%` and `box-sizing: border-box` from `.card` are
+ * preserved so the card always matches the wrapper (= the pill). */
+.cardInWrapper {
+  position: static;
+  top: auto;
+  right: auto;
+  left: auto;
+  width: 100%;
+}
+
 @keyframes fadeIn {
   from { opacity: 0; transform: translateY(-2px); }
   to   { opacity: 1; transform: translateY(0); }

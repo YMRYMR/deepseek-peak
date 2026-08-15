@@ -198,6 +198,11 @@ click the switch
                                      body: { paused: true|false } })
         ◄── JSON { isPaused, phase, isBlockedNow, queueSize, ... }
 
+click a queue row's send arrow
+  → fetch('/api/peak-hours/queue/dispatch', { method: 'POST',
+                                              body: { enqueuedAt } })
+        ◄── JSON { ok: true, dispatched } | { ok: false, error }
+
 user sends a chat message
   → ctx.llm.stream(options)  (in the host process)
         ── 'llm/stream' waterfall ──►
@@ -215,8 +220,9 @@ user sends a chat message
 
 ### Queue semantics
 
-- **Drain trigger**: phase flips peak→off-peak, or the user toggles
-  the switch OFF. Either wakes the drainer; the queue empties in
+- **Drain trigger**: phase flips peak→off-peak, the user toggles
+  the switch OFF, or the user clicks a queue card's per-row send
+  arrow. All three wake the same drainer; the queue empties in
   arrival order.
 - **Per-item signal**: a caller's `AbortSignal` (a chat session the
   user closed, an agent preset cancelled, a tool timeout) is honoured
@@ -229,6 +235,57 @@ user sends a chat message
   on the wire even though every agent loop has its own consumer.
 - **Process-local**: a harness restart loses the queue. The pause flag
   itself is persisted; the queue is not.
+
+### Queue card
+
+When the queue is non-empty, a second card appears below the chart
+card on the same hover surface. It uses the chart card's color
+recipe exactly (peak red / off-peak green, opaque base, dashed
+border pre-cutover) so the two cards read as one element. Each
+row is one line of the queued prompt; long prompts collapse to a
+single line with an ellipsis, and the full text (multi-line
+included) is on the row's `title` for the native hover tooltip.
+The list is capped at 10 lines (`max-height: 160px`); a longer
+queue scrolls with a `currentColor`-tinted scrollbar.
+
+Each row carries a small right-pointing arrow on its right edge.
+On the front (FIFO head) item it is a live button; on later items
+it renders as a faded, disabled affordance so the layout stays
+uniform without promising out-of-order dispatch.
+
+```
+┌─ on hover, below the chart card ──────────────────────────────┐
+│  QUEUE                                              3          │
+│  ──────────────────────────────────────────────────────────   │
+│  Refactor the auth flow to use the new session...      →     │  ← live
+│  Why is the chart failing to render? Add a deb...      →     │  ← ghost
+│  A very long message that should overflow th...        →     │  ← ghost
+└───────────────────────────────────────────────────────────────┘
+```
+
+### Manual dispatch
+
+The per-row send arrow hits
+`POST /api/peak-hours/queue/dispatch`:
+
+```
+Browser                          Host (this plugin's apply())
+───────                          ────────────────────────────
+click the front row's send arrow
+  → fetch('/api/peak-hours/queue/dispatch',
+          { method: 'POST', body: { enqueuedAt } })
+        ◄── JSON { ok: true, dispatched: { prompt, enqueuedAt } }
+        or  { ok: false, error: { kind: 'not-found' | 'not-front' | 'invalid' } }
+```
+
+The host finds the matching front item and releases it through
+the same drainer path the natural end-of-peak transition uses.
+The pause toggle is not changed. `not-front` is a defensive
+error for the race where a sibling item was already dispatched;
+the card UI handles it by refreshing its snapshot on the next
+2 s poll. The card is hidden when `queueSize === 0`, so the
+endpoint is only ever called with a row that was visible a moment
+ago.
 
 ### State envelope
 
@@ -246,10 +303,23 @@ type StateResult =
         nextPhaseAt: number,          // epoch ms
         cutoverAt: number,            // epoch ms, -1 if already live
         queueSize: number,            // 0..9999, clamped for the wire
+        queue: Array<{                // up to 100 items, FIFO order
+          prompt: string,             // the user's last user-role text,
+                                      // multi-line collapsed to '\n'
+          enqueuedAt: number,         // epoch ms
+        }>,
+        queueOverflow: number,        // items past the wire cap of 100
         refreshedAt: number,          // epoch ms
     } }
   | { ok: false; error: { kind: 'invalid', message: string } }
 ```
+
+`queue` is the live snapshot the queue card renders. Items appear
+in arrival order, so the first row is the next item the drainer
+will release. `queueSize` is the real in-memory queue depth and is
+the source of truth for "is the queue card even visible" — when
+it is 0 the card stays hidden even if a stale `queue` array
+lingers.
 
 ### Caching
 

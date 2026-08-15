@@ -27,3 +27,29 @@
   height: 6px;
   pointer-events: auto;
 }
+
+/* Hover container: when the user is hovering the pill, this is the
+ * single absolute-anchored surface that holds the chart card and the
+ * queue card stacked vertically. The container owns the absolute
+ * positioning (replacing the chart card's own `position: absolute`);
+ * the cards inside are normal-flow and stack with a 6 px gap. The
+ * 2 px gap between the pill and the container is the same as the
+ * chart card's old `top: calc(100% + 2px)` — the host's `::after`
+ * bridge absorbs the mouse transit so the card never flashes off.
+ *
+ * `width: 100%` of the host (= pill width) is the width contract the
+ * chart card relies on (`box-sizing: border-box; width: 100%`). The
+ * queue card also uses `width: 100%` of the container, so both cards
+ * always match the pill's width exactly. */
+.hover {
+  position: absolute;
+  top: calc(100% + 2px);
+  right: 0;
+  left: auto;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  z-index: 1000;
+  pointer-events: auto;
+}

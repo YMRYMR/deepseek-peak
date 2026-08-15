@@ -46,13 +46,27 @@ export interface UsageTooltipProps {
   preLaunch: boolean
   balance: BalanceResult | null
   balanceLoading: boolean
+  /**
+   * When true, the card is rendered inside the PeakHoursHost's
+   * `.hover` container, which owns the absolute positioning. The
+   * card itself becomes `position: static` so it stacks with the
+   * queue card below it. The default (`false`) keeps the legacy
+   * standalone behaviour, so other call sites (tests, etc.) work
+   * unchanged.
+   */
+  wrapperMode?: boolean
 }
 
 export function UsageTooltip(props: UsageTooltipProps) {
-  const { summary, isLoading, phase, preLaunch, balance, balanceLoading } = props
+  const { summary, isLoading, phase, preLaunch, balance, balanceLoading, wrapperMode = false } = props
 
+  // In wrapper mode, the host's `.hover` container owns the absolute
+  // positioning, so the card applies `.cardInWrapper` (static positioning
+  // override) on top of the `.card` body styling. Otherwise the default
+  // `.card` (absolute) keeps the tooltip usable standalone.
   const cardClass = [
     css.card,
+    wrapperMode ? css.cardInWrapper : '',
     phase === 'peak' ? css.cardPeak : css.cardOff,
     preLaunch ? css.cardPreLaunch : '',
   ].filter(Boolean).join(' ')
