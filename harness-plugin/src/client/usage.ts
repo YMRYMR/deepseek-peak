@@ -49,14 +49,26 @@ export interface DailyBucket {
   readonly tokens: number
   /**
    * Tokens on this date that landed inside a peak window (and so
-   * incurred the V4 surcharge). Zero pre-cutover; pre-cutover traffic
-   * is all `tokens - peakTokens` off-peak.
+   * would incur the V4 surcharge post-cutover). Schedule-based: a
+   * pre-cutover event that lands in 01:00-04:00 or 06:00-10:00 UTC
+   * still counts here, so the chart's split is visible from day one.
+   * The cost math in `pricing.ts` applies the flat rate to those
+   * records independently of this field.
    */
   readonly peakTokens: number
   /** USD cost for this model on this date. */
   readonly cost: number
   /** Number of assistant messages contributing to this bucket. */
   readonly messages: number
+  /**
+   * Per-hour breakdown keyed by UTC hour 0-23. Hours with zero
+   * traffic are absent; a missing key means "no events that hour",
+   * not "zero events". Each hour entry mirrors the day's shape
+   * minus the cost. Stored as a regular `Map` (not `ReadonlyMap`)
+   * so the in-browser trajectory fallback can write to it; the
+   * public read-only contract is enforced by convention.
+   */
+  readonly byHour: Map<number, { tokens: number; peakTokens: number; messages: number }>
 }
 
 export interface ModelUsage {
@@ -150,18 +162,32 @@ export function aggregateUsage(ctx: Context, rangeDays: number = 30): UsageSumma
       const tokens = usage.input + usage.output
       const peakTokens = isPeak(atTime) ? tokens : 0
       const cost = costForUsage(model, usage, atTime)
+      const hour = atTime.getUTCHours()
       let modelMap = buckets.get(model)
       if (modelMap === undefined) { modelMap = new Map(); buckets.set(model, modelMap) }
       const existing = modelMap.get(dayStr)
       if (existing === undefined) {
-        modelMap.set(dayStr, { date: dayStr, tokens, peakTokens, cost, messages: 1 })
+        const byHour = new Map<number, { tokens: number; peakTokens: number; messages: number }>()
+        byHour.set(hour, { tokens, peakTokens, messages: 1 })
+        modelMap.set(dayStr, { date: dayStr, tokens, peakTokens, cost, messages: 1, byHour })
       } else {
+        const hourBucket = existing.byHour.get(hour)
+        if (hourBucket === undefined) {
+          existing.byHour.set(hour, { tokens, peakTokens, messages: 1 })
+        } else {
+          existing.byHour.set(hour, {
+            tokens: hourBucket.tokens + tokens,
+            peakTokens: hourBucket.peakTokens + peakTokens,
+            messages: hourBucket.messages + 1,
+          })
+        }
         modelMap.set(dayStr, {
           date: dayStr,
           tokens: existing.tokens + tokens,
           peakTokens: existing.peakTokens + peakTokens,
           cost: existing.cost + cost,
           messages: existing.messages + 1,
+          byHour: existing.byHour,
         })
       }
       const totals = modelTotals.get(model) ?? { tokens: 0, cost: 0, messages: 0 }
@@ -344,7 +370,27 @@ function parseHostUsageEnvelope(body: unknown): UsageSummary | null {
         if (tokens === null || messages === null) continue
         const peakTokens = asNumber(b.peakTokens) ?? 0
         const cost = asNumber(b.cost) ?? 0
-        daily.set(dayStr, { date: dayStr, tokens, peakTokens, cost, messages })
+        // Per-hour rehydrate: the host's `byHour` is a Record keyed
+        // by UTC-hour-as-string (0-23). Re-hydrate to a Map<number>
+        // so the chart can read `bucket.byHour.get(7)` without
+        // parsing strings. An absent or malformed `byHour` becomes
+        // an empty map; the per-day totals still work.
+        const byHour = new Map<number, { tokens: number; peakTokens: number; messages: number }>()
+        const rawByHour = b.byHour
+        if (rawByHour !== null && typeof rawByHour === 'object') {
+          for (const [hourKey, hourBucket] of Object.entries(rawByHour as Record<string, unknown>)) {
+            if (hourBucket === null || typeof hourBucket !== 'object') continue
+            const hb = hourBucket as Record<string, unknown>
+            const hTokens = asNumber(hb.tokens)
+            const hMsgs = asNumber(hb.messages)
+            if (hTokens === null || hMsgs === null) continue
+            const hPeak = asNumber(hb.peakTokens) ?? 0
+            const hour = Number.parseInt(hourKey, 10)
+            if (!Number.isInteger(hour) || hour < 0 || hour > 23) continue
+            byHour.set(hour, { tokens: hTokens, peakTokens: hPeak, messages: hMsgs })
+          }
+        }
+        daily.set(dayStr, { date: dayStr, tokens, peakTokens, cost, messages, byHour })
       }
     }
     const totalTokens = asNumber(m.totalTokens) ?? 0
