@@ -598,17 +598,30 @@ interface DispatchJsonFailure {
 }
 export type DispatchJson = DispatchJsonSuccess | DispatchJsonFailure
 
-/** Settings namespace owning the persisted `paused` boolean. */
+/** Settings namespace owning the persisted `paused` boolean and the
+ *  low-balance warning threshold. Both are user-visible; the rest of
+ *  the plugin's state is a 1 Hz host-side computation, never persisted. */
 const STATE_NS = settingsNamespace('peak-hours')
 
-/** Settings schema. Only `paused` is user-visible; everything else is
- *  a 1 Hz host-side computation, never persisted. */
+/** Settings schema. `paused` is the toggle; `lowBalanceWarningUsd` is
+ *  the dollar amount below which the pill switches to an amber/warning
+ *  border. Default $1.00 — a sensible "you should top up soon" floor.
+ *  The user can override via the host's settings service (TUI, CLI,
+ *  whatever the harness exposes); there is no plugin-side UI for the
+ *  value, by the same rule that `paused` has its own pill toggle but
+ *  lives in the schema. */
 interface PeakHoursConfig {
   paused: boolean
+  lowBalanceWarningUsd: number
 }
 
 const Config: z<PeakHoursConfig> = z.object({
   paused: z.boolean().default(false),
+  // Non-negative USD. Zero is allowed and means "always warn" (useful
+  // for testing the visual without waiting for a real low balance).
+  // Negative values are rejected by the schema so a typo can't
+  // accidentally invert the comparison.
+  lowBalanceWarningUsd: z.number().min(0).default(1.0),
 })
 
 /** How often the host recomputes the phase (and watches for a boundary
@@ -697,6 +710,11 @@ export interface StateJsonSuccess {
     readonly queue: readonly QueueItemWire[]
     /** Number of items not in `queue` because of the cap. */
     readonly queueOverflow: number
+    /** Dollar amount below which the pill switches to its warning style.
+     *  Mirrors the persisted `lowBalanceWarningUsd` setting so a change
+     *  in the host's settings (TUI, CLI, etc.) reaches the browser
+     *  on the next 2 s state poll without a new route. */
+    readonly lowBalanceWarningUsd: number
     /** Epoch ms when the host last recomputed this state. */
     readonly refreshedAt: number
   }
@@ -738,6 +756,7 @@ function emptyState(
   phaseSnap: PhaseSnapshot,
   isPaused: boolean,
   queue: readonly QueueItem[],
+  lowBalanceWarningUsd: number,
 ): StateJsonSuccess {
   const wireQueue: QueueItemWire[] = []
   const cap = Math.min(queue.length, QUEUE_WIRE_ITEM_CAP)
@@ -758,6 +777,7 @@ function emptyState(
       queueSize: Math.min(queue.length, QUEUE_DISPLAY_CAP),
       queue: wireQueue,
       queueOverflow: Math.max(0, queue.length - wireQueue.length),
+      lowBalanceWarningUsd,
       refreshedAt: Date.now(),
     },
   }
@@ -884,7 +904,13 @@ export function apply(ctx: Context): void {
    *  callback so registration waits for the settings service without
    *  blocking the rest of `apply()`. */
 
-  const initialConfig: PeakHoursConfig = { paused: false }
+  const initialConfig: PeakHoursConfig = { paused: false, lowBalanceWarningUsd: 1.0 }
+  // Live copy of the warning threshold. Read at attach from the
+  // settings scope, updated on the watch so a change from outside
+  // the plugin (TUI, CLI, settings file) reaches the next /state
+  // response on the next tick. The closure variable is the source
+  // of truth for `emptyState`; the browser never recomputes it.
+  let lowBalanceWarningUsd = 1.0
   // The scope is created inside the inject callback; `null` until the
   // settings service is ready. The POST handler awaits this getter to
   // serialize toggle writes.
@@ -895,6 +921,7 @@ export function apply(ctx: Context): void {
     // Pull the persisted value (or the default) at attach.
     const v = scope.get()
     isPaused = v.paused
+    lowBalanceWarningUsd = v.lowBalanceWarningUsd
     recomputeBlocked()
     if (!isBlockedNow) void drainQueue()
     // Watch stored changes from outside the POST path (settings UI,
@@ -904,6 +931,7 @@ export function apply(ctx: Context): void {
       const dispose = scope.watch((next) => {
         if (disposed) return
         isPaused = next.paused
+        lowBalanceWarningUsd = next.lowBalanceWarningUsd
         recomputeBlocked()
         if (!isBlockedNow) void drainQueue()
       })
@@ -1061,7 +1089,7 @@ export function apply(ctx: Context): void {
       path: STATE_ROUTE,
       handler: async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
         if (req.method === 'GET' || req.method === 'HEAD') {
-          writeJson(res, 200, emptyState(phaseSnap, isPaused, queue))
+          writeJson(res, 200, emptyState(phaseSnap, isPaused, queue, lowBalanceWarningUsd))
           return
         }
         if (req.method !== 'POST') {
@@ -1098,7 +1126,7 @@ export function apply(ctx: Context): void {
           }
         }
         if (!isBlockedNow) void drainQueue()
-        writeJson(res, 200, emptyState(phaseSnap, isPaused, queue))
+        writeJson(res, 200, emptyState(phaseSnap, isPaused, queue, lowBalanceWarningUsd))
       },
     })
 

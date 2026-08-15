@@ -20,7 +20,21 @@ import { PauseSwitch } from './PauseSwitch.tsx'
 import { usePeakHoursState } from './peakHoursState.ts'
 import css from './PeakHoursPill.module.css'
 
-export function PeakHoursPill() {
+export interface PeakHoursPillProps {
+  /**
+   * When true, the pill's color cascades to an amber/warning style
+   * (border, dot, label, badge) instead of the green/red phase
+   * color. Computed by the parent (typically PeakHoursHost) from
+   * `balance.total < settings.lowBalanceWarningUsd`; the pill itself
+   * doesn't know about balance or thresholds. `undefined` is
+   * treated as `false` (no warning) so existing call sites keep
+   * working without changes.
+   */
+  lowBalance?: boolean
+}
+
+export function PeakHoursPill(props: PeakHoursPillProps = {}) {
+  const { lowBalance = false } = props
   const [snap, setSnap] = useState<PhaseSnapshot>(() => currentPhase(new Date()))
   const peakHours = usePeakHoursState()
 
@@ -41,16 +55,24 @@ export function PeakHoursPill() {
 
   return (
     <span
+      // The class order is intentional: `.lowBalance` is appended last
+      // so its color rule wins over `.peak`/`.off` in the stylesheet
+      // (the warning is the dominant signal — the user has a bigger
+      // problem than peak/off-peak if their balance is low). The
+      // `data-low-balance` attribute is the public surface for
+      // any downstream CSS or test that needs to query the state.
       className={[
         css.pill,
         snap.phase === 'peak' ? css.peak : css.off,
         snap.preLaunch ? css.preLaunch : '',
+        lowBalance ? css.lowBalance : '',
       ].filter(Boolean).join(' ')}
       data-peak-hours="pill"
       data-phase={snap.phase}
       data-pre-launch={snap.preLaunch ? 'true' : 'false'}
       data-paused={peakHours.state?.isPaused === true ? 'true' : 'false'}
       data-blocked={peakHours.state?.isBlockedNow === true ? 'true' : 'false'}
+      data-low-balance={lowBalance ? 'true' : 'false'}
       role="status"
       aria-live="polite"
     >
