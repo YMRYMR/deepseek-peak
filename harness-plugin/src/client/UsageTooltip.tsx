@@ -23,7 +23,7 @@
 import { useMemo } from 'react'
 import { modelDisplayName } from './pricing.ts'
 import {
-  formatTokens, formatUsd, type ModelUsage, type UsageSummary,
+  formatTokens, formatTokensFull, formatUsd, type ModelUsage, type UsageSummary,
 } from './usage.ts'
 import type { Phase } from './domain.ts'
 import type { BalanceError, BalanceResult } from './balance.ts'
@@ -72,38 +72,19 @@ export function UsageTooltip(props: UsageTooltipProps) {
     <div className={cardClass} role="tooltip" data-state={hasData ? 'ready' : 'empty'}>
       <header className={css.header}>
         <BalanceRow balance={balance} loading={balanceLoading} />
+        {hasData && (
+          <span className={css.headerMeta}>Last {RANGE_DAYS} days</span>
+        )}
       </header>
 
       {hasData && (
         <div className={css.models}>
-          {summary.models.map((m) => (
+          {summary.models.map(m => (
             <ModelCard key={m.model} model={m}
               days={RANGE_DAYS}
               rangeStartMs={summary.rangeStartUtc.getTime()} />
           ))}
         </div>
-      )}
-
-      {hasData && (
-        <footer className={css.footer}>
-          <span>Last {RANGE_DAYS} days</span>
-          <span className={css.footDot}>·</span>
-          <span>UTC</span>
-          {summary.firstRecordMs !== null && (
-            <>
-              <span className={css.footDot}>·</span>
-              <span title={new Date(summary.firstRecordMs).toISOString()}>
-                since {new Date(summary.firstRecordMs).toISOString().slice(0, 10)}
-              </span>
-            </>
-          )}
-          {summary.hadMissing && (
-            <>
-              <span className={css.footDot}>·</span>
-              <span className={css.warn} title="At least one session was unreachable for the walk">partial</span>
-            </>
-          )}
-        </footer>
       )}
     </div>
   )
@@ -190,13 +171,17 @@ interface ModelCardProps {
 }
 
 function ModelCard({ model, days, rangeStartMs }: ModelCardProps) {
-  const { series, max, labels } = useMemo(() => {
+  const { series, peakSeries, max, labels } = useMemo(() => {
     const s = new Array<number>(days).fill(0)
+    const ps = new Array<number>(days).fill(0)
     for (const [dateStr, bucket] of model.daily) {
       const dayIndex = Math.round(
-        (Date.parse(`${dateStr}T00:00:00Z`) - rangeStartMs) / DAY_MS
+        (Date.parse(`${dateStr}T00:00:00Z`) - rangeStartMs) / DAY_MS,
       )
-      if (dayIndex >= 0 && dayIndex < days) s[dayIndex] = bucket.tokens
+      if (dayIndex >= 0 && dayIndex < days) {
+        s[dayIndex] = bucket.tokens
+        ps[dayIndex] = bucket.peakTokens
+      }
     }
     const maxVal = Math.max(1, ...s)
     const labelCount = Math.min(5, days)
@@ -204,7 +189,7 @@ function ModelCard({ model, days, rangeStartMs }: ModelCardProps) {
     for (let i = 0; i < labelCount; i++) {
       labelIdx.push(Math.round((i * (days - 1)) / Math.max(1, labelCount - 1)))
     }
-    return { series: s, max: maxVal, labels: labelIdx }
+    return { series: s, peakSeries: ps, max: maxVal, labels: labelIdx }
   }, [model, days, rangeStartMs])
 
   // Y-axis ticks in viewBox units (0, 33, 66, 100).
@@ -214,16 +199,12 @@ function ModelCard({ model, days, rangeStartMs }: ModelCardProps) {
     <section className={css.model} data-model={model.model}>
       <div className={css.modelHeader}>
         <span className={css.modelName}>{modelDisplayName(model.model)}</span>
-        <span className={css.modelMeta}>
-          {formatTokens(model.totalTokens)}
-          <span className={css.modelDot}>·</span>
-          {formatUsd(model.totalCost)}
-        </span>
+        <span className={css.modelMeta}>{formatTokensFull(model.totalTokens)}</span>
       </div>
       <div className={css.chartWrap}>
         {/* Y-axis labels first so they sit on the LEFT in the flex row. */}
         <div className={css.yAxis} aria-hidden="true">
-          {yTickValues.slice().reverse().map((t) => (
+          {yTickValues.slice().reverse().map(t => (
             <span key={t} className={css.yTick}>{formatTokens(t)}</span>
           ))}
         </div>
@@ -247,15 +228,34 @@ function ModelCard({ model, days, rangeStartMs }: ModelCardProps) {
                 />
               )
             }
+            // Split: peak (red) on top, off-peak (green) on the bottom.
+            // `peakShare` is the per-bar fraction of peak tokens; for
+            // pre-cutover data `peakTokens === 0` so the off-peak fill
+            // spans the full bar.
+            const peakShare = value === 0 ? 0 : (peakSeries[i] ?? 0) / value
+            const peakH = h * peakShare
+            const offH = h - peakH
             return (
-              <rect
-                key={i}
-                x={i + (1 - BAR_UNIT) / 2}
-                y={CHART_VIEW_H - h}
-                width={BAR_UNIT}
-                height={h}
-                className={css.bar}
-              />
+              <g key={i}>
+                {offH > 0 && (
+                  <rect
+                    x={i + (1 - BAR_UNIT) / 2}
+                    y={CHART_VIEW_H - offH}
+                    width={BAR_UNIT}
+                    height={offH}
+                    className={css.barOff}
+                  />
+                )}
+                {peakH > 0 && (
+                  <rect
+                    x={i + (1 - BAR_UNIT) / 2}
+                    y={CHART_VIEW_H - h}
+                    width={BAR_UNIT}
+                    height={peakH}
+                    className={css.barPeak}
+                  />
+                )}
+              </g>
             )
           })}
         </svg>

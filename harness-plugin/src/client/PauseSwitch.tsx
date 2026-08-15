@@ -28,8 +28,6 @@ export interface PauseSwitchProps {
   readonly state: PeakHoursState | null
   /** Disable click handling while the first fetch is still in flight. */
   readonly disabled: boolean
-  /** Persisted + transient error flag from the state hook. */
-  readonly error: boolean
   /** POST a new paused value. */
   readonly onToggle: (value: boolean) => Promise<void>
 }
@@ -47,7 +45,7 @@ function trackLabel(isPaused: boolean, isBlockedNow: boolean): string {
 }
 
 export function PauseSwitch(props: PauseSwitchProps) {
-  const { state, disabled, error, onToggle } = props
+  const { state, disabled, onToggle } = props
   const isPaused = state?.isPaused === true
   const phase = state?.phase
   const isBlockedNow = state?.isBlockedNow === true
@@ -86,7 +84,6 @@ export function PauseSwitch(props: PauseSwitchProps) {
       className={[
         css.switch ?? '',
         trackClass(phase, isPaused),
-        error ? (css.error ?? '') : '',
       ].filter(Boolean).join(' ')}
       data-on={isPaused ? 'true' : 'false'}
       data-blocked={isBlockedNow ? 'true' : 'false'}

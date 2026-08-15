@@ -65,7 +65,6 @@ export function PeakHoursPill() {
       <PauseSwitch
         state={peakHours.state}
         disabled={peakHours.loading}
-        error={peakHours.error}
         onToggle={peakHours.setPaused}
       />
     </span>

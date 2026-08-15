@@ -66,12 +66,27 @@
 
 .header {
   display: flex;
-  flex-direction: column;
-  gap: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
   padding-bottom: 4px;
   margin-bottom: 4px;
   border-bottom: 1px solid color-mix(in srgb, currentColor 25%, transparent);
   pointer-events: none;
+}
+
+/* Right-side meta: a single subdued "Last N days" label that sits at
+ * the same baseline as the balance row, so the header reads as one
+ * horizontal line. */
+.headerMeta {
+  font-size: 9px;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  color: currentColor;
+  opacity: 0.55;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  flex: 0 0 auto;
 }
 
 /* Balance row: a single horizontal strip above the spent-line subtitle.
@@ -217,14 +232,25 @@
   align-self: flex-start;
 }
 
-.bar {
-  fill: currentColor;
-  opacity: 0.85;
-}
-
 .barFloor {
   fill: currentColor;
   opacity: 0.55;
+}
+
+/* Split-bar palette: off-peak (the baseline) is the green the pill
+ * already uses for the off-peak state; peak (the surcharge portion)
+ * is the red the pill uses for the peak state. Opacity is full so
+ * the two halves read as distinct events at a glance. The fill
+ * colors are independent of the card's `currentColor` so the chart
+ * looks the same whether the card sits in an off-peak or peak
+ * surface (the card's border / label still track the surface). */
+.barOff {
+  fill: var(--dsw-color-success, #19c37d);
+  opacity: 0.85;
+}
+.barPeak {
+  fill: var(--dsw-color-danger, #ef4444);
+  opacity: 0.9;
 }
 
 .yAxis {
@@ -271,12 +297,15 @@
 }
 
 .footer {
+  /* The footer used to live below the chart; the "Last N days" metadata
+   * moved to the right of the header so the card has no body below the
+   * chart. The rule is kept (without the line) so a future caller can
+   * reintroduce a footer block without a CSS rewrite. */
   display: flex;
   align-items: center;
   gap: 5px;
   padding-top: 5px;
   margin-top: 3px;
-  border-top: 1px solid color-mix(in srgb, currentColor 18%, transparent);
   font-size: 9px;
   opacity: 0.65;
   pointer-events: none;
