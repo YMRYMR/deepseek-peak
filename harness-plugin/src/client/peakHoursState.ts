@@ -16,6 +16,16 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { Phase } from './domain.ts'
 
+/** One item in the queue card. Mirrors the host's `QueueItemWire`
+ *  (capped at `QUEUE_WIRE_ITEM_CAP` items; the rest count toward
+ *  `state.queueOverflow`). The card shows one line per item with
+ *  the `prompt` truncated; the full text lives in the `title` for
+ *  hover. */
+export interface QueueItemView {
+  readonly prompt: string
+  readonly enqueuedAt: number
+}
+
 /** Wire shape mirrored from `src/index.ts` `StateJsonSuccess.state`. */
 export interface PeakHoursState {
   readonly isPaused: boolean
@@ -27,6 +37,10 @@ export interface PeakHoursState {
   /** Epoch ms of the pricing-cutover; -1 if already live. */
   readonly cutoverAt: number
   readonly queueSize: number
+  /** Per-message payload for the queue card (capped; see `queueOverflow`). */
+  readonly queue: readonly QueueItemView[]
+  /** Count of items not in `queue` because of the wire cap. */
+  readonly queueOverflow: number
   readonly refreshedAt: number
 }
 
@@ -44,6 +58,9 @@ export interface PeakHoursStateHook {
   readonly setPaused: (value: boolean) => Promise<void>
   /** Flip the current `isPaused` value (no-op if no state yet). */
   readonly toggle: () => Promise<void>
+  /** Manually release the front queued item; the pause toggle is
+   *  not changed. The card's "send" button calls this. */
+  readonly dispatchQueueItem: (enqueuedAt: number) => Promise<void>
 }
 
 interface StateJsonOk {
@@ -73,6 +90,21 @@ function isStateJson(value: unknown): value is StateJson {
 function readState(json: StateJson): PeakHoursState | null {
   if (!json.ok) return null
   const s = json.state as unknown as Record<string, unknown>
+  // Queue items: defensive parse. The host sends a `queue` array of
+  // `{ prompt, enqueuedAt }`; the parser rebuilds the typed view and
+  // silently drops any item that doesn't match (the card would
+  // rather show one less row than crash on a shape drift).
+  const queue: QueueItemView[] = []
+  const rawQueue = s.queue
+  if (Array.isArray(rawQueue)) {
+    for (const raw of rawQueue) {
+      if (raw === null || typeof raw !== 'object') continue
+      const item = raw as Record<string, unknown>
+      const prompt = typeof item.prompt === 'string' ? item.prompt : ''
+      const enqueuedAt = typeof item.enqueuedAt === 'number' ? item.enqueuedAt : Date.now()
+      queue.push({ prompt, enqueuedAt })
+    }
+  }
   return {
     isPaused: Boolean(s.isPaused),
     phase: s.phase === 'peak' ? 'peak' : 'off',
@@ -81,6 +113,8 @@ function readState(json: StateJson): PeakHoursState | null {
     nextPhaseAt: typeof s.nextPhaseAt === 'number' ? s.nextPhaseAt : -1,
     cutoverAt: typeof s.cutoverAt === 'number' ? s.cutoverAt : -1,
     queueSize: typeof s.queueSize === 'number' ? s.queueSize : 0,
+    queue,
+    queueOverflow: typeof s.queueOverflow === 'number' ? s.queueOverflow : 0,
     refreshedAt: typeof s.refreshedAt === 'number' ? s.refreshedAt : Date.now(),
   }
 }
@@ -185,8 +219,62 @@ export function usePeakHoursState(): PeakHoursStateHook {
     await setPaused(!current.isPaused)
   }, [setPaused])
 
-  return { state, loading, setPaused, toggle }
+  /**
+   * Manually release the front queued item via the host's
+   * `POST /api/peak-hours/queue/dispatch`. The pause toggle stays
+   * as-is; this is an explicit per-row override, not a state
+   * change. The card's "send" button calls this with the item's
+   * `enqueuedAt`. The host returns either the dispatched item
+   * (success), `not-found` (item is no longer queued, e.g. it
+   * drained naturally a moment ago), or `not-front` (item was
+   * behind another item, which is a race the card handles by
+   * refreshing its snapshot). Errors are surfaced as console
+   * warnings so the user-visible card state stays clean.
+   */
+  const dispatchQueueItem = useCallback(async (enqueuedAt: number): Promise<void> => {
+    try {
+      const res = await fetch(DISPATCH_ENDPOINT, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ enqueuedAt }),
+      })
+      const raw: unknown = await res.json()
+      if (typeof raw !== 'object' || raw === null) {
+        console.warn('ui-peak-hours: dispatch returned a non-object envelope')
+        return
+      }
+      const env = raw as Record<string, unknown>
+      if (env.ok === true) {
+        // Success: optimistically reflect the dispatch in the local
+        // snapshot so the row disappears immediately. The 2 s poll
+        // will reconcile any drift.
+        const prev = stateRef.current
+        if (prev !== null) {
+          const nextQueue = prev.queue.filter(it => it.enqueuedAt !== enqueuedAt)
+          const nextSize = Math.max(0, prev.queueSize - 1)
+          const nextOverflow = prev.queueSize > nextQueue.length
+            ? Math.max(0, prev.queueOverflow)
+            : prev.queueOverflow
+          setState({ ...prev, queue: nextQueue, queueSize: nextSize, queueOverflow: nextOverflow })
+        }
+        return
+      }
+      // ok: false: the host returned a structured error. Surface it
+      // in the console; the card UI keeps the row visible (the
+      // next poll will reconcile if the item drained naturally).
+      const err = (env as { error?: { kind?: string; message?: string } }).error
+      const kind = err?.kind ?? 'unknown'
+      const message = err?.message ?? 'no message'
+      console.warn(`ui-peak-hours: dispatch failed (${kind}): ${message}`)
+    } catch (err) {
+      console.warn('ui-peak-hours: dispatch POST failed', err)
+    }
+  }, [])
+
+  return { state, loading, setPaused, toggle, dispatchQueueItem }
 }
+
+const DISPATCH_ENDPOINT = '/api/peak-hours/queue/dispatch'
 
 // Expose the byte limit for tests / parity checks against the host.
 export const STATE_POST_BODY_BYTE_LIMIT = POST_BODY_BYTE_LIMIT

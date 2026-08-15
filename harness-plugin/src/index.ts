@@ -577,6 +577,27 @@ async function aggregateFromPersistence(
 
 const STATE_ROUTE = '/api/peak-hours/state'
 
+/** Manual dispatch: the user can force-release the front queued item
+ *  via a per-row "send" button on the queue card. POST body is the
+ *  item's `enqueuedAt`; the host finds the matching front item and
+ *  releases it through the same drainer path the natural queue
+ *  release uses. The pause toggle stays as-is — the dispatch is an
+ *  explicit user override, not a state change. */
+const DISPATCH_ROUTE = '/api/peak-hours/queue/dispatch'
+
+interface DispatchJsonSuccess {
+  readonly ok: true
+  readonly dispatched: QueueItemWire
+}
+interface DispatchJsonFailure {
+  readonly ok: false
+  readonly error: {
+    readonly kind: 'invalid' | 'not-found' | 'not-front' | 'unavailable'
+    readonly message: string
+  }
+}
+export type DispatchJson = DispatchJsonSuccess | DispatchJsonFailure
+
 /** Settings namespace owning the persisted `paused` boolean. */
 const STATE_NS = settingsNamespace('peak-hours')
 
@@ -603,6 +624,53 @@ const PHASE_TICK_MS = 1_000
  *  this for diagnostic purposes but the wire reply clamps it. */
 const QUEUE_DISPLAY_CAP = 9_999
 
+/** Cap on the per-item queue payload the host serializes into the
+ *  state response. The card shows up to 10 lines with a scrollbar,
+ *  so sending much more than 100 items is wasteful — a typical peak
+ *  burst is 2-5 messages, an extreme one is 10, and 100 leaves room
+ *  for a worst case without bloating the wire. Items beyond the cap
+ *  count toward `queueOverflow` so the card can still say "N more
+ *  queued" instead of silently dropping them. */
+const QUEUE_WIRE_ITEM_CAP = 100
+
+/** One queue item, trimmed for the wire: the user's prompt text
+ *  (so the card can show one line per message) and when it was
+ *  enqueued (so the card can sort / display age). The full
+ *  `GenerateOptions` stays in the host's in-memory `queue` and is
+ *  never serialized. */
+interface QueueItemWire {
+  readonly prompt: string
+  readonly enqueuedAt: number
+}
+
+/**
+ * Extract the user's prompt text from a queued `GenerateOptions`. The
+ * options carry the full conversation (`messages: Message[]`); the
+ * user's just-typed text is the LAST user-role message's text blocks
+ * joined with newlines. A request with no user message (rare — tool
+ * continuations, synthetic replays) falls back to the system prompt
+ * so the card still has something to show; an empty request reads as
+ * the empty string and the card renders an ellipsis row.
+ */
+function extractUserPrompt(options: GenerateOptions): string {
+  const msgs = options.messages
+  for (let i = msgs.length - 1; i >= 0; i--) {
+    const m = msgs[i]
+    if (m === undefined || m.role !== 'user') continue
+    const parts: string[] = []
+    for (const block of m.content) {
+      if (block.type === 'text') parts.push(block.text)
+    }
+    if (parts.length > 0) return parts.join('\n')
+  }
+  // No user message: fall back to the system prompt (sometimes the
+  // first line is the only meaningful text on a tool continuation).
+  if (typeof options.system === 'string' && options.system.length > 0) {
+    return options.system
+  }
+  return ''
+}
+
 /** JSON envelope the host always returns. */
 export interface StateJsonSuccess {
   readonly ok: true
@@ -618,6 +686,17 @@ export interface StateJsonSuccess {
     readonly cutoverAt: number
     /** Pending stream count (clamped to QUEUE_DISPLAY_CAP for the wire). */
     readonly queueSize: number
+    /**
+     * Per-message payload for the queue card. Capped at
+     * `QUEUE_WIRE_ITEM_CAP`; anything past that count is reflected
+     * in `queueOverflow` so the card can show "+N more queued"
+     * instead of dropping the tail silently. Items are emitted in
+     * arrival order so the card's first row is the next item the
+     * drainer will release.
+     */
+    readonly queue: readonly QueueItemWire[]
+    /** Number of items not in `queue` because of the cap. */
+    readonly queueOverflow: number
     /** Epoch ms when the host last recomputed this state. */
     readonly refreshedAt: number
   }
@@ -655,7 +734,18 @@ interface QueueItem {
   readonly enqueuedAt: number
 }
 
-function emptyState(phaseSnap: PhaseSnapshot, isPaused: boolean, queueSize: number): StateJsonSuccess {
+function emptyState(
+  phaseSnap: PhaseSnapshot,
+  isPaused: boolean,
+  queue: readonly QueueItem[],
+): StateJsonSuccess {
+  const wireQueue: QueueItemWire[] = []
+  const cap = Math.min(queue.length, QUEUE_WIRE_ITEM_CAP)
+  for (let i = 0; i < cap; i++) {
+    const item = queue[i]
+    if (item === undefined) continue
+    wireQueue.push({ prompt: extractUserPrompt(item.options), enqueuedAt: item.enqueuedAt })
+  }
   return {
     ok: true,
     state: {
@@ -665,7 +755,9 @@ function emptyState(phaseSnap: PhaseSnapshot, isPaused: boolean, queueSize: numb
       isBlockedNow: isPaused && phaseSnap.phase === 'peak' && !phaseSnap.preLaunch,
       nextPhaseAt: phaseSnap.nextBoundaryUtc.getTime(),
       cutoverAt: phaseSnap.preLaunch ? phaseSnap.nextBoundaryUtc.getTime() : -1,
-      queueSize: Math.min(queueSize, QUEUE_DISPLAY_CAP),
+      queueSize: Math.min(queue.length, QUEUE_DISPLAY_CAP),
+      queue: wireQueue,
+      queueOverflow: Math.max(0, queue.length - wireQueue.length),
       refreshedAt: Date.now(),
     },
   }
@@ -950,7 +1042,7 @@ export function apply(ctx: Context): void {
       path: STATE_ROUTE,
       handler: async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
         if (req.method === 'GET' || req.method === 'HEAD') {
-          writeJson(res, 200, emptyState(phaseSnap, isPaused, queue.length))
+          writeJson(res, 200, emptyState(phaseSnap, isPaused, queue))
           return
         }
         if (req.method !== 'POST') {
@@ -987,7 +1079,88 @@ export function apply(ctx: Context): void {
           }
         }
         if (!isBlockedNow) void drainQueue()
-        writeJson(res, 200, emptyState(phaseSnap, isPaused, queue.length))
+        writeJson(res, 200, emptyState(phaseSnap, isPaused, queue))
+      },
+    })
+
+    const dispatchInvalid = (message: string): DispatchJsonFailure =>
+      ({ ok: false, error: { kind: 'invalid', message } })
+    const dispatchNotFound = (): DispatchJsonFailure =>
+      ({ ok: false, error: { kind: 'not-found', message: 'no queued item matches that identifier' } })
+    const dispatchNotFront = (): DispatchJsonFailure =>
+      ({ ok: false, error: { kind: 'not-front', message: 'only the front item can be manually dispatched (FIFO)' } })
+
+    const disposeDispatchRoute = webServer.register({
+      kind: 'exact',
+      path: DISPATCH_ROUTE,
+      handler: async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
+        if (req.method !== 'POST') {
+          res.writeHead(405, { allow: 'POST' })
+          res.end()
+          return
+        }
+        const body = await readJsonBody(req, 1024)
+        if (body === undefined) {
+          writeJson(res, 200, dispatchInvalid('request body is missing or not valid JSON'))
+          return
+        }
+        if (typeof body !== 'object' || body === null) {
+          writeJson(res, 200, dispatchInvalid('request body must be a JSON object'))
+          return
+        }
+        const enqueuedAtRaw = (body as Record<string, unknown>).enqueuedAt
+        if (typeof enqueuedAtRaw !== 'number' || !Number.isFinite(enqueuedAtRaw) || enqueuedAtRaw < 0) {
+          writeJson(res, 200, dispatchInvalid('enqueuedAt must be a non-negative number'))
+          return
+        }
+        if (queue.length === 0) {
+          writeJson(res, 200, dispatchNotFound())
+          return
+        }
+        const front = queue[0]
+        if (front === undefined || front.enqueuedAt !== enqueuedAtRaw) {
+          // The card only renders a button on the front item (the FIFO
+          // head); clicking a later item's button is treated as a
+          // race-loss: the user might have dispatched a sibling a
+          // moment ago, so the card's row is stale.
+          if (queue.some(it => it.enqueuedAt === enqueuedAtRaw)) {
+            writeJson(res, 200, dispatchNotFront())
+            return
+          }
+          writeJson(res, 200, dispatchNotFound())
+          return
+        }
+        // Manually release the front item. The drainer would normally
+        // gate this on `!isBlockedNow`, but the user explicitly asked
+        // for the override; we briefly flip the block flag, let the
+        // drainer pick up the item, and restore the flag on the
+        // next tick. The drainer's `await done` resumes on the
+        // stream's `complete()`, so a partial stream (e.g. user
+        // abort) still serializes the next item correctly.
+        const prevBlocked = isBlockedNow
+        isBlockedNow = false
+        const item = queue.shift() as QueueItem
+        // Synthesize a `complete` resolver the drainer can use, so
+        // the queue's invariant ("only one item dispatched at a
+        // time") holds even when the dispatch path bypasses the
+        // drainer's own while loop. The drainer's `drainQueue` is
+        // idempotent on `draining === true`, so calling it from
+        // here is safe; if it's already running, the while loop
+        // will see the shifted queue and pick up the new front.
+        const done = new Promise<void>((resolve) => { item.complete = () => resolve() })
+        item.drain()
+        try {
+          await done
+        } catch (err) {
+          ctx.logger?.warn(`ui-peak-hours: dispatched item errored: ${err instanceof Error ? err.message : String(err)}`)
+        } finally {
+          isBlockedNow = prevBlocked
+        }
+        const wire: QueueItemWire = {
+          prompt: extractUserPrompt(item.options),
+          enqueuedAt: item.enqueuedAt,
+        }
+        writeJson(res, 200, { ok: true, dispatched: wire } satisfies DispatchJsonSuccess)
       },
     })
 
@@ -1042,6 +1215,7 @@ export function apply(ctx: Context): void {
     ctx.effect(() => () => {
       disposeBalanceRoute()
       disposeStateRoute()
+      disposeDispatchRoute()
       disposeUsageRoute()
       if (balanceRefreshTimer !== null) {
         clearTimeout(balanceRefreshTimer)

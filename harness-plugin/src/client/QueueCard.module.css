@@ -1,0 +1,153 @@
+/* QueueCard: a sibling card to the chart card, same aesthetic
+ * (uses the same `.card`/`.cardPeak`/`.cardOff`/`.cardPreLaunch`
+ * rules from UsageTooltip.module.css for the outer surface) but
+ * with a list of one-line messages instead of a chart.
+ *
+ * Each row is `white-space: nowrap; text-overflow: ellipsis` so
+ * long prompts collapse to a single line; the full text lives in
+ * the row's `title` attribute for hover. The list has
+ * `max-height: 160px` (10 lines at 11px / 1.35 line-height) and
+ * `overflow-y: auto`, so a queue longer than 10 items scrolls.
+ */
+
+.queueCard {
+  /* Inherits the chart card's background / border / padding / radius
+   * via the shared `.card` className. The queue-specific layout
+   * lives in the rules below. */
+  pointer-events: auto;
+}
+
+.queueHeader {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  padding-bottom: 4px;
+  margin-bottom: 4px;
+  border-bottom: 1px solid color-mix(in srgb, currentColor 25%, transparent);
+  pointer-events: none;
+}
+
+.queueLabel {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  opacity: 0.55;
+  font-family: var(--dsw-font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+}
+
+.queueCount {
+  font-size: 11px;
+  font-weight: 600;
+  color: currentColor;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.005em;
+}
+
+.queueOverflow {
+  font-size: 9px;
+  font-weight: 500;
+  opacity: 0.7;
+  font-variant-numeric: tabular-nums;
+  font-family: var(--dsw-font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+}
+
+.queueList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  /* The list scrolls when more than 10 items are queued. The
+   * scrollbar inherits the card's currentColor tint so it
+   * matches the peak/off-peak surface. scrollbar-width and
+   * scrollbar-color are the modern Firefox spec; Chromium
+   * picks them up too in recent versions. The legacy
+   * webkit-scrollbar pseudo-element selectors are deliberately
+   * omitted because the lightningcss bundler this package
+   * ships with chokes on them, and the default Chromium
+   * scrollbar is already thin enough not to dominate the card. */
+  scrollbar-width: thin;
+  scrollbar-color: currentColor transparent;
+  pointer-events: auto;
+}
+
+.queueItem {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  line-height: 1.35;
+  padding: 2px 0;
+  color: currentColor;
+  /* A subtle hover affordance so the user knows the row has more
+   * text behind it; the `cursor` stays default (it's a div, not a
+   * link) but the row brightens on hover. The native `title`
+   * attribute is the actual tooltip for the prompt text. */
+  transition: opacity 120ms ease;
+  opacity: 0.85;
+  cursor: default;
+}
+
+.queueItem:hover {
+  opacity: 1;
+}
+
+.queueItemText {
+  flex: 1 1 0;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.queueItemEmpty {
+  font-style: italic;
+  opacity: 0.6;
+}
+
+/* Send arrow: a small right-pointing chevron on the right edge of
+ * the row, with the same `currentColor` as the card so it inherits
+ * the peak/off-peak tint. The button is `background: transparent`
+ * and has no border — it sits inside the row's flex gap so the
+ * row's existing `text-overflow: ellipsis` clipping on the prompt
+ * still works. The 18×18 hit area is the smallest comfortable
+ * target on a touchpad; the visual glyph is 10×10 so the row's
+ * vertical rhythm is unchanged. */
+.queueItemArrow {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  border-radius: 4px;
+  color: currentColor;
+  opacity: 0.7;
+  cursor: pointer;
+  transition: opacity 120ms ease, background-color 120ms ease;
+}
+
+.queueItemArrow:hover {
+  opacity: 1;
+  background-color: color-mix(in srgb, currentColor 18%, transparent);
+}
+
+.queueItemArrow:focus-visible {
+  outline: 1px solid currentColor;
+  outline-offset: 1px;
+  opacity: 1;
+}
+
+.queueItemArrow:active {
+  background-color: color-mix(in srgb, currentColor 28%, transparent);
+}
+
+.queueItemArrowDisabled {
+  opacity: 0.25;
+  cursor: not-allowed;
+  pointer-events: none;
+}

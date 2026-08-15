@@ -46,13 +46,27 @@ export interface UsageTooltipProps {
   preLaunch: boolean
   balance: BalanceResult | null
   balanceLoading: boolean
+  /**
+   * When true, the card is rendered inside the PeakHoursHost's
+   * `.hover` container, which owns the absolute positioning. The
+   * card itself becomes `position: static` so it stacks with the
+   * queue card below it. The default (`false`) keeps the legacy
+   * standalone behaviour, so other call sites (tests, etc.) work
+   * unchanged.
+   */
+  wrapperMode?: boolean
 }
 
 export function UsageTooltip(props: UsageTooltipProps) {
-  const { summary, isLoading, phase, preLaunch, balance, balanceLoading } = props
+  const { summary, isLoading, phase, preLaunch, balance, balanceLoading, wrapperMode = false } = props
 
+  // In wrapper mode, the host's `.hover` container owns the absolute
+  // positioning, so the card applies `.cardInWrapper` (static positioning
+  // override) on top of the `.card` body styling. Otherwise the default
+  // `.card` (absolute) keeps the tooltip usable standalone.
   const cardClass = [
     css.card,
+    wrapperMode ? css.cardInWrapper : '',
     phase === 'peak' ? css.cardPeak : css.cardOff,
     preLaunch ? css.cardPreLaunch : '',
   ].filter(Boolean).join(' ')
@@ -73,7 +87,12 @@ export function UsageTooltip(props: UsageTooltipProps) {
       <header className={css.header}>
         <BalanceRow balance={balance} loading={balanceLoading} />
         {hasData && (
-          <span className={css.headerMeta}>Last {RANGE_DAYS} days</span>
+          <span
+            className={css.headerMeta}
+            title="Harness-local events walked from the session persistence log. The platform's usage page at platform.deepseek.com shows your total DeepSeek usage across every tool; the peak/off-peak split per bar here is only computable from this harness's per-event timestamps."
+          >
+            This harness · last {RANGE_DAYS} days
+          </span>
         )}
       </header>
 
@@ -84,6 +103,18 @@ export function UsageTooltip(props: UsageTooltipProps) {
               days={RANGE_DAYS}
               rangeStartMs={summary.rangeStartUtc.getTime()} />
           ))}
+          {/* Shared legend so the peak/off-peak split is legible. The
+            * chart bars use the same green/red as the pill (peak red on
+            * top, off-peak green on the bottom), but with no legend a
+            * first-time viewer can't tell which is which — and pre-cutover
+            * data is all green, so the legend has to ship before the
+            * cutover or the value of the split is invisible. */}
+          <div className={css.legend} aria-hidden="true">
+            <span className={css.legendPeak} />
+            <span className={css.legendLabel}>peak</span>
+            <span className={css.legendOff} />
+            <span className={css.legendLabel}>off-peak</span>
+          </div>
         </div>
       )}
     </div>

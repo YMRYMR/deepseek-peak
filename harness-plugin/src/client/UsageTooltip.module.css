@@ -42,6 +42,20 @@
   animation: fadeIn 140ms ease-out;
 }
 
+/* Wrapper-mode variant: the host's `.hover` container owns the absolute
+ * positioning, so the card is normal-flow and stacks with the queue
+ * card below it. The `css.card` body styling (background, border,
+ * padding, etc.) is kept; only the positioning is overridden. The
+ * `width: 100%` and `box-sizing: border-box` from `.card` are
+ * preserved so the card always matches the wrapper (= the pill). */
+.cardInWrapper {
+  position: static;
+  top: auto;
+  right: auto;
+  left: auto;
+  width: 100%;
+}
+
 @keyframes fadeIn {
   from { opacity: 0; transform: translateY(-2px); }
   to   { opacity: 1; transform: translateY(0); }
@@ -309,6 +323,48 @@
   font-size: 9px;
   opacity: 0.65;
   pointer-events: none;
+}
+
+/* Peak / off-peak legend: a single horizontal strip under the chart
+ * cards. Two small swatches using the same colors as the bars (the
+ * pill's red and green) so the eye learns the mapping in 200 ms.
+ * Sufficiently subdued that it doesn't compete with the chart, but
+ * visible enough that a first-time viewer can decode the split.
+ * Pre-cutover data renders all-green, so the red swatch is the only
+ * signal that "this is going to mean something in two days". */
+.legend {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding-top: 5px;
+  margin-top: 3px;
+  font-size: 9px;
+  color: currentColor;
+  opacity: 0.7;
+  pointer-events: none;
+  font-variant-numeric: tabular-nums;
+}
+.legendPeak {
+  display: inline-block;
+  width: 9px;
+  height: 5px;
+  border-radius: 1px;
+  background: var(--dsw-color-danger, #ef4444);
+  opacity: 0.9;
+}
+.legendOff {
+  display: inline-block;
+  width: 9px;
+  height: 5px;
+  border-radius: 1px;
+  background: var(--dsw-color-success, #19c37d);
+  opacity: 0.85;
+}
+.legendLabel {
+  letter-spacing: 0.04em;
+  opacity: 0.7;
+  /* A small left margin so the first label doesn't sit on the
+   * swatch's edge; uses gap above. */
 }
 
 .placeholder {

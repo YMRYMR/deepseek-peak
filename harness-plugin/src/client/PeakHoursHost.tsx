@@ -28,6 +28,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { PeakHoursPill } from './PeakHoursPill.tsx'
 import { UsageTooltip } from './UsageTooltip.tsx'
+import { QueueCard } from './QueueCard.tsx'
+import { usePeakHoursState } from './peakHoursState.ts'
 import { fetchHostUsage, type UsageSummary } from './usage.ts'
 import { currentPhase, type Phase } from './domain.ts'
 import { BalanceCache, fetchBalance, type BalanceResult } from './balance.ts'
@@ -76,6 +78,16 @@ export interface PeakHoursHostProps {
 
 export function PeakHoursHost(props: PeakHoursHostProps) {
   const { aggregate, subscribeSessions, subscribeMessageTick } = props
+
+  // Read the live pause/queue state from the host. The hook owns its
+  // own 2-s polling; the host gives us the per-message payload for
+  // the queue card so we can render one row per item. The `toggle`
+  // / `setPaused` are exposed via the pill's own state hook
+  // (PauseSwitch reads them directly), so the host doesn't need to
+  // thread them through. The `dispatchQueueItem` thunk powers the
+  // card's per-row "send" arrow: it bypasses the pause switch to
+  // release the front item through the host's dispatch endpoint.
+  const { state: pauseState, dispatchQueueItem } = usePeakHoursState()
 
   const [hovered, setHovered] = useState(false)
   const [summary, setSummary] = useState<UsageSummary | null>(null)
@@ -252,6 +264,17 @@ export function PeakHoursHost(props: PeakHoursHostProps) {
     return () => clearInterval(id)
   }, [hovered])
 
+  // The hover container is a flex column anchored below the pill.
+  // It holds the chart card (always) and the queue card (only when
+  // there are queued messages). The chart card applies `wrapperMode`
+  // so it stops anchoring itself absolutely and stacks with the
+  // queue card under it. The host's `::after` bridge absorbs the
+  // 2 px gap between the pill and the container.
+  const queueItems = pauseState?.queue ?? []
+  const queueOverflow = pauseState?.queueOverflow ?? 0
+  const queueTotal = pauseState?.queueSize ?? 0
+  const showQueue = hovered && queueTotal > 0
+
   return (
     <span
       className={css.host}
@@ -262,14 +285,26 @@ export function PeakHoursHost(props: PeakHoursHostProps) {
     >
       <PeakHoursPill />
       {hovered && (
-        <UsageTooltip
-          summary={summary}
-          isLoading={summaryLoading}
-          phase={phase}
-          preLaunch={preLaunch}
-          balance={balance}
-          balanceLoading={balanceLoading}
-        />
+        <div className={css.hover}>
+          <UsageTooltip
+            wrapperMode
+            summary={summary}
+            isLoading={summaryLoading}
+            phase={phase}
+            preLaunch={preLaunch}
+            balance={balance}
+            balanceLoading={balanceLoading}
+          />
+          {showQueue && (
+            <QueueCard
+              items={queueItems}
+              overflow={queueOverflow}
+              phase={phase}
+              preLaunch={preLaunch}
+              onDispatch={dispatchQueueItem}
+            />
+          )}
+        </div>
       )}
     </span>
   )
