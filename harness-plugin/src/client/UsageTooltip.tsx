@@ -87,12 +87,15 @@ export function UsageTooltip(props: UsageTooltipProps) {
       <header className={css.header}>
         <BalanceRow balance={balance} loading={balanceLoading} />
         {hasData && (
-          <span
+          <a
             className={css.headerMeta}
-            title="Harness-local events walked from the session persistence log. The platform's usage page at platform.deepseek.com shows your total DeepSeek usage across every tool; the peak/off-peak split per bar here is only computable from this harness's per-event timestamps."
+            href="https://platform.deepseek.com/top_up"
+            target="_blank"
+            rel="noopener noreferrer"
+            title="Add funds to your DeepSeek account (opens platform.deepseek.com in a new tab)."
           >
-            This harness · last {RANGE_DAYS} days
-          </span>
+            Top up
+          </a>
         )}
       </header>
 
