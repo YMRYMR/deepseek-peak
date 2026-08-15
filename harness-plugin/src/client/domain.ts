@@ -20,6 +20,7 @@
 export {
   CUTOVER_UTC,
   currentPhase,
+  isPeak,
   phaseLabel,
   type Phase,
   type PhaseSnapshot,

@@ -104,8 +104,13 @@ const BALANCE_CACHE_TTL_MS = 5 * 60 * 1000
 /** Network timeout for the host-side fetch. The browser waits up to 10 s; we cap at 8 s. */
 const BALANCE_FETCH_TIMEOUT_MS = 8_000
 
-/** Cache refresh interval. Matches TTL so the first hover after expiry is still warm. */
+/** Cache refresh interval on success. Matches TTL so the first hover after expiry is still warm. */
 const BALANCE_REFRESH_INTERVAL_MS = BALANCE_CACHE_TTL_MS
+/** Cache refresh interval on failure. A transient upstream blip should clear
+ *  in seconds, not in 5 min — a stuck cache is more visible to the user
+ *  than a brief retry loop. The interval is 30 s so a 1-min outage is
+ *  invisible by the time the next browser poll lands. */
+const BALANCE_RETRY_INTERVAL_MS = 30_000
 
 /** JSON body the host always returns. */
 export interface BalanceJsonSuccess {
@@ -573,19 +578,41 @@ export function apply(ctx: Context): void {
     let balanceCached: CachedBalance | null = null
     let balanceRefreshTimer: NodeJS.Timeout | null = null
     const balanceRefresh = async (): Promise<void> => {
+      let nextDelay = BALANCE_REFRESH_INTERVAL_MS
       try {
         const apiKey = await resolveApiKey(ctx)
         if (apiKey === undefined) {
+          // No API key is a configuration problem, not a transient
+          // failure: cache the `unavailable` envelope so the user sees
+          // the diagnostic on the next hover. We do not retry fast —
+          // a missing key will not appear by itself in 30 s.
           balanceCached = { result: unavailable('DEEPSEEK_API_KEY is not configured'), fetchedAt: Date.now() }
           return
         }
         const result = await fetchUpstream(apiKey)
-        balanceCached = { result, fetchedAt: Date.now() }
+        // Only cache the success. A failure envelope from `fetchUpstream`
+        // is a transient upstream blip (network, 5xx, parse); keeping
+        // the previous good value visible is more useful than flashing
+        // a "fetch failed" toast at the user on every blip.
+        if (result.ok) {
+          balanceCached = { result, fetchedAt: Date.now() }
+        } else {
+          // Upstream returned an error envelope (HTTP / parse / network).
+          // Do NOT touch `balanceCached`; the previous good value stays.
+          // Switch the next refresh to the fast-retry cadence so the
+          // blip clears in seconds, not in 5 min.
+          ctx.logger?.warn(`ui-peak-hours: balance upstream error (kind=${result.error.kind}): ${result.error.message}`)
+          nextDelay = BALANCE_RETRY_INTERVAL_MS
+        }
       } catch (err) {
-        ctx.logger?.warn('ui-peak-hours: balance refresh failed unexpectedly')
+        // Defensive: `fetchUpstream` catches its own errors and returns
+        // an envelope. Reaching here means a programming error, not an
+        // upstream issue — log it but do not poison the cache.
+        ctx.logger?.warn('ui-peak-hours: balance refresh threw unexpectedly')
         ctx.logger?.warn(err)
+        nextDelay = BALANCE_RETRY_INTERVAL_MS
       } finally {
-        balanceRefreshTimer = setTimeout(() => { void balanceRefresh() }, BALANCE_REFRESH_INTERVAL_MS)
+        balanceRefreshTimer = setTimeout(() => { void balanceRefresh() }, nextDelay)
         balanceRefreshTimer.unref?.()
       }
     }

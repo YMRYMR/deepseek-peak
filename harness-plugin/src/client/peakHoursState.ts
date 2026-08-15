@@ -40,8 +40,6 @@ export interface PeakHoursStateHook {
   readonly state: PeakHoursState | null
   /** True for the duration of the first fetch (no state yet). */
   readonly loading: boolean
-  /** True if the last fetch or POST failed at the network/parse layer. */
-  readonly error: boolean
   /** POST a new paused value. Resolves with the fresh state on success. */
   readonly setPaused: (value: boolean) => Promise<void>
   /** Flip the current `isPaused` value (no-op if no state yet). */
@@ -91,11 +89,17 @@ function readState(json: StateJson): PeakHoursState | null {
  * Read the live state and keep the snapshot fresh. One poll cycle every
  * 2 s is the only background work; the in-flight guard is a single
  * boolean ref so a slow fetch never piles up overlapping requests.
+ *
+ * Error policy: transient errors (network blips, harness restart) are
+ * invisible to the user. The hook retries on the next interval and the
+ * previous good `state` keeps rendering. A failure that lasts for the
+ * whole 2 s cadence surfaces as a console warning for diagnostics, not
+ * as a UI flag. The user only sees something when there is no
+ * successful value yet (`state === null`, `loading === true`).
  */
 export function usePeakHoursState(): PeakHoursStateHook {
   const [state, setState] = useState<PeakHoursState | null>(null)
   const [loading, setLoading] = useState<boolean>(true)
-  const [error, setError] = useState<boolean>(false)
   const inflightRef = useRef<boolean>(false)
   // A ref to the current state so `toggle()` can read the latest value
   // without re-creating the callback on every render.
@@ -109,19 +113,20 @@ export function usePeakHoursState(): PeakHoursStateHook {
       const res = await fetch(STATE_ENDPOINT, { method: 'GET', headers: { accept: 'application/json' } })
       const raw: unknown = await res.json()
       if (!isStateJson(raw)) {
-        setError(true)
+        console.warn('ui-peak-hours: state endpoint returned a non-state envelope; keeping previous snapshot')
         return
       }
       const next = readState(raw)
       if (next === null) {
         // `ok: false` is a host-side availability problem, not a wire problem.
-        setError(true)
+        console.warn('ui-peak-hours: state endpoint returned ok:false; keeping previous snapshot')
         return
       }
-      setError(false)
       setState(next)
-    } catch {
-      setError(true)
+    } catch (err) {
+      // Network blip or harness restart. The previous snapshot is still
+      // good; the next 2-s tick will try again. Log only — no UI.
+      console.warn('ui-peak-hours: state poll failed; keeping previous snapshot', err)
     } finally {
       inflightRef.current = false
       setLoading(false)
@@ -154,15 +159,23 @@ export function usePeakHoursState(): PeakHoursStateHook {
       })
       // Body is small enough that the response is always under POST_BODY_BYTE_LIMIT.
       const raw: unknown = await res.json()
-      if (!isStateJson(raw)) { setError(true); return }
+      if (!isStateJson(raw)) {
+        console.warn('ui-peak-hours: state POST returned a non-state envelope; rolling back')
+        if (prev !== null) setState(prev)
+        return
+      }
       const next = readState(raw)
-      if (next === null) { setError(true); return }
-      setError(false)
+      if (next === null) {
+        console.warn('ui-peak-hours: state POST returned ok:false; rolling back')
+        if (prev !== null) setState(prev)
+        return
+      }
       setState(next)
-    } catch {
-      // Roll back the optimistic flip and surface the failure.
+    } catch (err) {
+      // Roll back the optimistic flip and log. The user keeps the
+      // pre-click state visually; the next 2-s poll will reconcile.
+      console.warn('ui-peak-hours: state POST failed; rolling back', err)
       if (prev !== null) setState(prev)
-      setError(true)
     }
   }, [])
 
@@ -172,7 +185,7 @@ export function usePeakHoursState(): PeakHoursStateHook {
     await setPaused(!current.isPaused)
   }, [setPaused])
 
-  return { state, loading, error, setPaused, toggle }
+  return { state, loading, setPaused, toggle }
 }
 
 // Expose the byte limit for tests / parity checks against the host.

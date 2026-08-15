@@ -14,6 +14,7 @@
 
 import type { Context } from '@deepseek-ai/cordis'
 import type { SessionId } from '@deepseek-ai/dsh-client-runtime/client'
+import { isPeak } from './domain.ts'
 import { costForUsage, type TokenUsage as PricingUsage } from './pricing.ts'
 
 /** Defensive view of the LLM `TokenUsage` shape carried on assistant nodes. */
@@ -44,8 +45,14 @@ function readModel(node: { provenance?: { model?: unknown } }): string | null {
 export interface DailyBucket {
   /** UTC date string `YYYY-MM-DD`. */
   readonly date: string
-  /** Sum of input + output tokens for this model on this date. */
+  /** Sum of input + output tokens for this model on this date (peak + off-peak). */
   readonly tokens: number
+  /**
+   * Tokens on this date that landed inside a peak window (and so
+   * incurred the V4 surcharge). Zero pre-cutover; pre-cutover traffic
+   * is all `tokens - peakTokens` off-peak.
+   */
+  readonly peakTokens: number
   /** USD cost for this model on this date. */
   readonly cost: number
   /** Number of assistant messages contributing to this bucket. */
@@ -103,13 +110,8 @@ export function aggregateUsage(ctx: Context, rangeDays: number = 30): UsageSumma
   let firstRecordMs: number | null = null
   let hadMissing = false
 
-  const ctxAny = ctx as unknown as {
-    sessions?: {
-      list: { getSnapshot(): { ids: readonly SessionId[] } }
-      binding(id: SessionId): { session?: { getSnapshot(): { views: Map<string, unknown> } } } | undefined
-    }
-  }
-  if (ctxAny.sessions === undefined) {
+  const sessions = (ctx as { sessions?: { list: { getSnapshot(): { ids: readonly SessionId[] } } } }).sessions
+  if (sessions === undefined) {
     return {
       rangeDays, rangeStartUtc, rangeEndUtc,
       models: [], totalTokens: 0, totalCost: 0, totalMessages: 0,
@@ -117,7 +119,12 @@ export function aggregateUsage(ctx: Context, rangeDays: number = 30): UsageSumma
     }
   }
 
-  const ids = ctxAny.sessions.list.getSnapshot().ids
+  const ids = sessions.list.getSnapshot().ids
+  const ctxAny = ctx as unknown as {
+    sessions: {
+      binding(id: SessionId): { session?: { getSnapshot(): { views: Map<string, unknown> } } } | undefined
+    }
+  }
 
   for (const id of ids) {
     const binding = ctxAny.sessions.binding(id)
@@ -137,17 +144,20 @@ export function aggregateUsage(ctx: Context, rangeDays: number = 30): UsageSumma
       // pricing records that will be dropped.
       if (node.time < rangeStartUtc.getTime() || node.time >= rangeEndUtc.getTime() + DAY_MS) continue
       const dayStr = new Date(node.time).toISOString().slice(0, 10)
+      const atTime = new Date(node.time)
       const tokens = usage.input + usage.output
-      const cost = costForUsage(model, usage, new Date(node.time))
+      const peakTokens = isPeak(atTime) ? tokens : 0
+      const cost = costForUsage(model, usage, atTime)
       let modelMap = buckets.get(model)
       if (modelMap === undefined) { modelMap = new Map(); buckets.set(model, modelMap) }
       const existing = modelMap.get(dayStr)
       if (existing === undefined) {
-        modelMap.set(dayStr, { date: dayStr, tokens, cost, messages: 1 })
+        modelMap.set(dayStr, { date: dayStr, tokens, peakTokens, cost, messages: 1 })
       } else {
         modelMap.set(dayStr, {
           date: dayStr,
           tokens: existing.tokens + tokens,
+          peakTokens: existing.peakTokens + peakTokens,
           cost: existing.cost + cost,
           messages: existing.messages + 1,
         })
@@ -197,4 +207,18 @@ export function formatTokens(value: number): string {
   if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(0)}M`
   if (value >= 1_000) return `${(value / 1_000).toFixed(0)}K`
   return String(value)
+}
+
+/**
+ * Format a token count with dots as thousand separators (the European
+ * convention) and no abbreviation: `274321` -> `274.321`. Used where the
+ * model card's per-model total is the headline number and a compact
+ * "274K" would hide the real magnitude.
+ */
+export function formatTokensFull(value: number): string {
+  if (!Number.isFinite(value) || value < 0) return '0'
+  const rounded = Math.round(value)
+  // Insert a dot every 3 digits from the right. Locale-free so the
+  // shape is stable regardless of the browser's user-locale.
+  return rounded.toString().replace(/\B(?=(\d{3})+(?!\d))/g, '.')
 }
