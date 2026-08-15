@@ -333,7 +333,28 @@ export function PeakHoursHost(props: PeakHoursHostProps) {
       onFocusCapture={onEnter}
       onBlurCapture={onLeave}
     >
-      <PeakHoursPill />
+      <PeakHoursPill
+        lowBalance={(() => {
+          // The pill's warning style rides on `data-low-balance="true"`
+          // for downstream consumers and on the `.lowBalance` class
+          // for the amber border. The comparison is `balance.total <
+          // threshold`; the threshold is the latest value from the
+          // host's settings (default $1.00). No balance yet (cold
+          // launch, fetch in flight, host unreachable) → no warning;
+          // a false-quiet pill is much less harmful than a false-warn
+          // on every fresh install. The host's `lowBalanceWarningUsd`
+          // poll is 2 s, so a settings change reaches the pill
+          // within two ticks without a new route. The `?? 1.0`
+          // mirrors the host's schema default; a null `pauseState`
+          // (first poll still in flight) does not warn.
+          if (balance === null) return false
+          if (!balance.ok) return false
+          if (balance.balance.entries.length === 0) return false
+          const total = balance.balance.entries[0]?.total ?? 0
+          const threshold = pauseState?.lowBalanceWarningUsd ?? 1.0
+          return total < threshold
+        })()}
+      />
       {hovered && (
         <div className={css.hover}>
           <UsageTooltip

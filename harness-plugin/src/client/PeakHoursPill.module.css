@@ -89,6 +89,19 @@
   background: color-mix(in srgb, var(--dsw-color-danger, #ef4444) 12%, transparent);
 }
 
+/* Low-balance warning: amber/gold. Defined AFTER `.off` and `.peak` so
+ * it wins the cascade when the parent applies both. Same intensity
+ * recipe as the phase colors (12 % background tint, full color on the
+ * border via `currentColor`); the only difference is the hue. A user
+ * who is running low on credit has a bigger problem than peak/off-peak
+ * pricing, so the warning deliberately replaces the phase color rather
+ * than stacking on top — there's no "off-peak with low balance"
+ * state, only "low balance". */
+.lowBalance {
+  color: var(--dsw-color-warning, #f5a623);
+  background: color-mix(in srgb, var(--dsw-color-warning, #f5a623) 14%, transparent);
+}
+
 /* Pre-cutover: dashed border, no background tint change — the schedule's
  * band (green/red) stays the primary signal. */
 .preLaunch {

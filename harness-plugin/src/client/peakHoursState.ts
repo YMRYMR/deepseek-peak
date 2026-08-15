@@ -41,6 +41,11 @@ export interface PeakHoursState {
   readonly queue: readonly QueueItemView[]
   /** Count of items not in `queue` because of the wire cap. */
   readonly queueOverflow: number
+  /** Dollar amount below which the pill switches to its warning style.
+   *  Mirrors the host's persisted `lowBalanceWarningUsd` setting.
+   *  The browser never persists or recomputes this; it just reads
+   *  the latest value on each 2 s state poll. */
+  readonly lowBalanceWarningUsd: number
   readonly refreshedAt: number
 }
 
@@ -115,6 +120,15 @@ function readState(json: StateJson): PeakHoursState | null {
     queueSize: typeof s.queueSize === 'number' ? s.queueSize : 0,
     queue,
     queueOverflow: typeof s.queueOverflow === 'number' ? s.queueOverflow : 0,
+    // `lowBalanceWarningUsd` is a 0-or-positive USD amount. Coerce
+    // non-numbers and negatives to the conservative default of $1
+    // rather than NaN/negative — the comparison is `balance < threshold`
+    // and a junk threshold would either false-warn or false-quiet.
+    lowBalanceWarningUsd: (() => {
+      const raw = s.lowBalanceWarningUsd
+      if (typeof raw !== 'number' || !Number.isFinite(raw) || raw < 0) return 1.0
+      return raw
+    })(),
     refreshedAt: typeof s.refreshedAt === 'number' ? s.refreshedAt : Date.now(),
   }
 }
