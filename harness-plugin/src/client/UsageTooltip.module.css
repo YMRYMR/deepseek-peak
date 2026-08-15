@@ -89,17 +89,30 @@
   pointer-events: none;
 }
 
-/* Right-side meta: a small "Top up" pill that links to the platform
- * top-up page. Sits at the same baseline as the balance row. The
- * parent header has `pointer-events: none` so the tooltip doesn't
- * intercept host-level hover; this rule re-enables clicks on the
- * pill itself. Visual weight matches the surrounding label rhythm
- * (9px, 0.55 opacity) but the border + uppercase distinguishes it
- * as actionable. The screen-reader text is "Top up" (sentence case
- * for clean a11y); the uppercase is purely a visual treatment. */
-.headerMeta {
+/* Right-side actions: a small group of pills (REFRESH + TOP UP) that
+ * sit at the same baseline as the balance row. The parent header has
+ * `pointer-events: none` so the tooltip doesn't intercept host-level
+ * hover; the action group re-enables pointer events on itself. The
+ * group's gap is tight (4px) so the two pills read as a single header
+ * affordance, not as two competing buttons. */
+.headerActions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
+  pointer-events: auto;
+}
+
+/* Shared pill style for the header actions. Used by both the REFRESH
+ * `<button>` and the TOP UP `<a>` so the two read as a single visual
+ * unit. Visual weight matches the surrounding label rhythm (9px, 0.65
+ * opacity) but the border + uppercase distinguishes them as actionable.
+ * The screen-reader text is sentence case ("Refresh", "Top up"); the
+ * uppercase is purely a visual treatment via `text-transform`. */
+.headerAction {
   font-size: 9px;
   font-weight: 500;
+  font-family: inherit;
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: currentColor;
@@ -107,26 +120,49 @@
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
   flex: 0 0 auto;
-  pointer-events: auto;
   text-decoration: none;
   padding: 2px 7px;
   border: 1px solid color-mix(in srgb, currentColor 35%, transparent);
   border-radius: 3px;
+  background: transparent;
   cursor: pointer;
   transition: opacity 120ms ease, background 120ms ease, border-color 120ms ease;
 }
-.headerMeta:hover {
+.headerAction:hover:not(:disabled) {
   opacity: 1;
   background: color-mix(in srgb, currentColor 10%, transparent);
   border-color: color-mix(in srgb, currentColor 60%, transparent);
 }
-.headerMeta:focus-visible {
+.headerAction:focus-visible {
   opacity: 1;
   outline: 1px solid currentColor;
   outline-offset: 1px;
 }
-.headerMeta:active {
+.headerAction:active:not(:disabled) {
   transform: translateY(0.5px);
+}
+.headerAction:disabled {
+  /* When the button is mid-refresh we keep the pill visible (so the
+   * loading affordance is legible) but drop the cursor and the
+   * hover/active feedback — clicking does nothing. Opacity holds at
+   * the resting value rather than dimming further; a dimmer "loading"
+   * pill reads as broken, not as working. */
+  cursor: progress;
+  opacity: 0.65;
+}
+
+/* Three-dot indicator shown in place of "Refresh" while the balance
+ * fetch is in flight. The pulse is a single-property opacity loop
+ * (no transform) so the pill doesn't visibly shift while it's
+ * updating — the dots are the only motion. */
+.headerActionDots {
+  display: inline-block;
+  letter-spacing: 0.18em;
+  animation: headerActionPulse 900ms ease-in-out infinite;
+}
+@keyframes headerActionPulse {
+  0%, 100% { opacity: 0.35; }
+  50%      { opacity: 1; }
 }
 
 /* Balance row: a single horizontal strip above the spent-line subtitle.

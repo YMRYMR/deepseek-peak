@@ -52,11 +52,17 @@ export type BalanceResult =
  * credentials seam and returns the JSON payload below. A 200 with
  * `ok: false` is the documented failure shape; anything else is a
  * transport-level error and gets translated to a `network` kind.
+ *
+ * `fresh=true` adds `?fresh=1` to bypass the host's 5-min cache and
+ * force an upstream re-fetch. The browser cache is the caller's
+ * concern — pass `fresh=true` together with a `BalanceCache.invalidate()`
+ * for a full cache-bust on both sides.
  */
-export async function fetchBalance(): Promise<BalanceResult> {
+export async function fetchBalance(fresh: boolean = false): Promise<BalanceResult> {
+  const url = fresh ? `${BALANCE_ENDPOINT}?fresh=1` : BALANCE_ENDPOINT
   let response: Response
   try {
-    response = await fetch(BALANCE_ENDPOINT, {
+    response = await fetch(url, {
       method: 'GET',
       headers: { 'Accept': 'application/json' },
       // Same-origin GET; the webserver's no-credentials default is fine.

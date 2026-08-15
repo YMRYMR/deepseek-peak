@@ -203,6 +203,31 @@ export function PeakHoursHost(props: PeakHoursHostProps) {
     }
   }, [])
 
+  /**
+   * Forced refresh for the REFRESH button. Bypasses both caches
+   * (browser via `fresh=true` query, host via `?fresh=1` handler)
+   * and updates the balance row to the upstream value. The inflight
+   * guard reuses `balanceInflightRef` so a user-driven click and a
+   * hover-driven prefetch can never race into two setStates at once.
+   * Invalidate the browser cache first so a "click, fast second
+   * click" pattern doesn't read the just-stale value from cache on
+   * the second click — both clicks reach the host.
+   */
+  const refreshBalanceNow = useCallback(async () => {
+    if (balanceInflightRef.current) return
+    balanceCacheRef.current.invalidate()
+    balanceInflightRef.current = true
+    setBalanceLoading(true)
+    try {
+      const result = await fetchBalance(true)
+      balanceCacheRef.current.set(result)
+      setBalance(result)
+    } finally {
+      balanceInflightRef.current = false
+      setBalanceLoading(false)
+    }
+  }, [])
+
   // Lazy fetch: on first hover, compute summary + balance.
   const onEnter = useCallback(() => {
     setHovered(true)
@@ -319,6 +344,7 @@ export function PeakHoursHost(props: PeakHoursHostProps) {
             preLaunch={preLaunch}
             balance={balance}
             balanceLoading={balanceLoading}
+            onRefreshBalance={refreshBalanceNow}
           />
           {showQueue && (
             <QueueCard

@@ -1026,11 +1026,30 @@ export function apply(ctx: Context): void {
           res.end()
           return
         }
-        if (balanceCached !== null && Date.now() - balanceCached.fetchedAt < BALANCE_CACHE_TTL_MS) {
+        // `?fresh=1` bypasses the 5-min host cache and forces an
+        // upstream re-fetch. The browser uses this for the manual
+        // REFRESH button in the tooltip — a user who just topped up
+        // and wants to see the new balance without waiting for the
+        // natural 5-min refresh tick. The query is read defensively
+        // so a malformed URL falls back to the cached path rather
+        // than failing the whole request.
+        let forceFresh = false
+        if (_req.url !== undefined) {
+          try {
+            const url = new URL(_req.url, 'http://x')
+            forceFresh = url.searchParams.get('fresh') === '1'
+          } catch {
+            forceFresh = false
+          }
+        }
+        if (forceFresh) {
+          await balanceRefresh()
+        } else if (balanceCached !== null && Date.now() - balanceCached.fetchedAt < BALANCE_CACHE_TTL_MS) {
           writeJson(res, 200, balanceCached.result)
           return
+        } else {
+          await balanceRefresh()
         }
-        await balanceRefresh()
         const result: BalanceJson = balanceCached?.result
           ?? unavailable('balance cache is empty after refresh')
         writeJson(res, 200, result)

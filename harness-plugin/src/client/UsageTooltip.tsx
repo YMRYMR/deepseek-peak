@@ -55,10 +55,22 @@ export interface UsageTooltipProps {
    * unchanged.
    */
   wrapperMode?: boolean
+  /**
+   * Handler for the REFRESH button next to TOP UP. Bypasses both
+   * browser and host caches and forces an upstream re-fetch so a
+   * user who just topped up sees the new balance without waiting
+   * for the natural 5-min refresh tick. Optional so non-host
+   * call sites (tests, etc.) can render the tooltip without
+   * wiring up a refresh action.
+   */
+  onRefreshBalance?: () => void
 }
 
 export function UsageTooltip(props: UsageTooltipProps) {
-  const { summary, isLoading, phase, preLaunch, balance, balanceLoading, wrapperMode = false } = props
+  const {
+    summary, isLoading, phase, preLaunch, balance, balanceLoading,
+    wrapperMode = false, onRefreshBalance,
+  } = props
 
   // In wrapper mode, the host's `.hover` container owns the absolute
   // positioning, so the card applies `.cardInWrapper` (static positioning
@@ -87,15 +99,33 @@ export function UsageTooltip(props: UsageTooltipProps) {
       <header className={css.header}>
         <BalanceRow balance={balance} loading={balanceLoading} />
         {hasData && (
-          <a
-            className={css.headerMeta}
-            href="https://platform.deepseek.com/top_up"
-            target="_blank"
-            rel="noopener noreferrer"
-            title="Add funds to your DeepSeek account (opens platform.deepseek.com in a new tab)."
-          >
-            Top up
-          </a>
+          <span className={css.headerActions}>
+            {onRefreshBalance !== undefined && (
+              <button
+                type="button"
+                className={css.headerAction}
+                onClick={onRefreshBalance}
+                disabled={balanceLoading}
+                aria-label={balanceLoading ? 'Refreshing balance' : 'Refresh balance'}
+                title={balanceLoading
+                  ? 'Refreshing balance from the platform…'
+                  : 'Force a fresh balance read from the platform (bypasses the 5-min cache).'}
+              >
+                {balanceLoading
+                  ? <span className={css.headerActionDots} aria-hidden="true">•••</span>
+                  : 'Refresh'}
+              </button>
+            )}
+            <a
+              className={css.headerAction}
+              href="https://platform.deepseek.com/top_up"
+              target="_blank"
+              rel="noopener noreferrer"
+              title="Add funds to your DeepSeek account (opens platform.deepseek.com in a new tab)."
+            >
+              Top up
+            </a>
+          </span>
         )}
       </header>
 
