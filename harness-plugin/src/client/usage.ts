@@ -306,7 +306,19 @@ export async function fetchHostUsage(
       // Same-origin GET. The host always answers 200 with a JSON
       // envelope; anything else is a wire surprise we translate to
       // a transient failure.
-      signal: signal ?? AbortSignal.timeout(10_000),
+      //
+      // 60 s, not 10 s: the host's cold walk over a populated
+      // persistence log inspects every session in batches of 8 and
+      // can take 10-30 s for typical users. The previous 10 s
+      // budget fired before the host could answer, so the browser
+      // fell through to the in-browser trajectory walk (which only
+      // sees sessions the user has opened in the trajectory tab) and
+      // the chart showed a strict subset of the real data on first
+      // hover. 60 s gives 2-3x margin for the cold walk; the
+      // caller's `signal` (tied to `hostUsageAbortRef`) still
+      // cancels the fetch immediately on hover-out, so a user who
+      // moves on is not held to the full budget.
+      signal: signal ?? AbortSignal.timeout(60_000),
     })
   } catch (err) {
     if (typeof console !== 'undefined') {

@@ -197,9 +197,17 @@ export function PeakHoursHost(props: PeakHoursHostProps) {
     setHovered(false)
     // Cancel any in-flight host fetch so a stale response doesn't
     // land after the user has moved the cursor away.
+    //
+    // Do NOT null `hostUsageAbortRef.current` here. The recomputeSummary
+    // IIFE's `finally` block is the only place that resets the loading
+    // state, and it gates that reset on `hostUsageAbortRef.current ===
+    // abort` — if we null the ref before the fetch rejects, the finally
+    // skips the reset and the card stays in the "Scanning session
+    // history…" state on the next hover. The abort() call alone is
+    // enough to cancel the fetch; the IIFE's finally owns the ref's
+    // lifecycle.
     if (hostUsageAbortRef.current !== null) {
       hostUsageAbortRef.current.abort()
-      hostUsageAbortRef.current = null
     }
   }, [])
 
