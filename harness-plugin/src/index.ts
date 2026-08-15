@@ -64,7 +64,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import { Buffer } from 'node:buffer'
 import type { Context } from '@deepseek-ai/cordis'
 import { credentialRef, type CredentialProvider, type CredentialRef } from '@deepseek-ai/dsh-credentials'
-import { settingsNamespace } from '@deepseek-ai/dsh-settings'
+import { installSettingsSection, settingsNamespace } from '@deepseek-ai/dsh-settings'
 import { launchEnvironmentOf } from '@deepseek-ai/dsh-launch-environment'
 import type { GenerateOptions, StreamChunk } from '@deepseek-ai/dsh-llm'
 // Type-only: pulls the `webServer` Context merge so the route registration
@@ -913,30 +913,41 @@ export function apply(ctx: Context): void {
   let lowBalanceWarningUsd = 1.0
   // The scope is created inside the inject callback; `null` until the
   // settings service is ready. The POST handler awaits this getter to
-  // serialize toggle writes.
-  let updateCurrent: ((patch: object) => Promise<void>) | null = null
-  ctx.inject(['settings'], (sctx) => {
-    const scope = sctx.settings.register(STATE_NS, Config, { base: initialConfig })
-    updateCurrent = patch => scope.update(patch)
-    // Pull the persisted value (or the default) at attach.
-    const v = scope.get()
-    isPaused = v.paused
-    lowBalanceWarningUsd = v.lowBalanceWarningUsd
-    recomputeBlocked()
-    if (!isBlockedNow) void drainQueue()
-    // Watch stored changes from outside the POST path (settings UI,
-    // another tab, CLI tool) so the host flag tracks the source of
-    // truth rather than only the live POST.
-    sctx.effect(() => {
-      const dispose = scope.watch((next) => {
-        if (disposed) return
-        isPaused = next.paused
-        lowBalanceWarningUsd = next.lowBalanceWarningUsd
-        recomputeBlocked()
-        if (!isBlockedNow) void drainQueue()
-      })
-      return () => dispose()
-    }, 'ui-peak-hours: settings watch')
+  // serialize toggle writes. The current code path uses
+  // `installSettingsSection` (the helper) rather than registering the
+  // namespace directly; the helper both registers the schema and
+  // marks the namespace as a Plugin configuration section so the
+  // Settings → Plugins → Plugin configuration page shows the plugin
+  // with a `paused` toggle and a `lowBalanceWarningUsd` number input.
+  // Source thunk for the latest value. `installSettingsSection`'s
+  // `setSource` hook stores it; `onChange` (which fires without
+  // arguments) pulls the current value through it. Defaults to the
+  // schema's `initialConfig` so a value is available even before the
+  // settings service attaches.
+  let source: () => PeakHoursConfig = () => initialConfig
+  installSettingsSection(ctx, STATE_NS, Config, initialConfig, {
+    setSource: (current) => {
+      source = current
+    },
+    onChange: () => {
+      if (disposed) return
+      const v = source()
+      isPaused = v.paused
+      lowBalanceWarningUsd = v.lowBalanceWarningUsd
+      recomputeBlocked()
+      if (!isBlockedNow) void drainQueue()
+    },
+    // Defence in depth: the schema's `z.number().min(0)` already
+    // rejects negatives at the wire boundary, but the Plugin
+    // configuration UI lets the user type a value and submit, and
+    // the schema parse failure surfaces as a generic `parse` kind.
+    // This hook makes the rejection a clear, named error with the
+    // exact field name in the message.
+    validate: (value) => {
+      if (!Number.isFinite(value.lowBalanceWarningUsd) || value.lowBalanceWarningUsd < 0) {
+        throw new Error('lowBalanceWarningUsd must be a non-negative number')
+      }
+    },
   })
 
   /* === LLM stream gate ==================================================== *
@@ -1113,14 +1124,20 @@ export function apply(ctx: Context): void {
         }
         isPaused = pausedRaw
         recomputeBlocked()
-        if (updateCurrent !== null) {
+        // Persist via the settings service. The namespace is
+        // registered through `installSettingsSection` so the Plugin
+        // configuration UI and the pill POST both write to the same
+        // scope; the service-level `update` call is equivalent to
+        // the old `scope.update` we used before, just without holding
+        // a scope handle in the closure. Missing settings service
+        // → skip persistence; the host flag is already flipped
+        // (live semantics) so the next process can recover from
+        // the live host state via the next POST.
+        const settings = ctx.get('settings') as { update?: (ns: unknown, patch: unknown) => Promise<unknown> } | undefined
+        if (settings?.update !== undefined) {
           try {
-            await updateCurrent({ paused: pausedRaw })
+            await settings.update(STATE_NS, { paused: pausedRaw })
           } catch (err) {
-            // The host flag has already been flipped above (live semantics:
-            // a pause toggle takes effect immediately). Persistence failure
-            // is a warning, not a route failure — the next process can
-            // recover from the live host state via the next POST.
             ctx.logger?.warn('ui-peak-hours: settings update failed; toggle is live but not persisted')
             ctx.logger?.warn(err)
           }
