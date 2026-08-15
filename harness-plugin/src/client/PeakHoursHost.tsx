@@ -35,6 +35,32 @@ import css from './PeakHoursHost.module.css'
 
 const RANGE_DAYS = 30
 
+/**
+ * Throttle window for "new message landed" ticks. The host's `?fresh=1`
+ * walk is the dominant cost of a refresh (parallel-batched, but still
+ * bounded by the number of persisted sessions, since listSnapshots
+ * doesn't expose a "last event time" to skip sessions outside the
+ * range). For a busy harness the cold walk is in the 1-5 s range, and
+ * a burst of chat messages would otherwise queue one walk per message,
+ * leaving the chart stuck in "Scanning session history…" almost
+ * continuously. The first message in a quiet window triggers an
+ * immediate fresh walk; further messages within this many ms are
+ * coalesced. 30 s gives an active user a clearly live chart (a fresh
+ * walk every 30 s of traffic) without the constant loading state.
+ */
+const MESSAGE_TICK_THROTTLE_MS = 30_000
+
+/**
+ * Background refresh cadence for the chart while the tooltip is open.
+ * Matches the balance row's 5-min host cache so the user always sees
+ * data no more than 5 min old without leaving the tooltip. The
+ * refresh fires silently (no loading flash): the data swaps in
+ * without a visible state transition because a user who is hovering
+ * the pill for 6 minutes does not want to see "Scanning…" every
+ * 5 min — they want the bars to keep moving.
+ */
+const CHART_REFRESH_MS = 5 * 60_000
+
 export interface PeakHoursHostProps {
   /**
    * Per-request aggregation closure. Used as the fallback when the host
@@ -96,10 +122,15 @@ export function PeakHoursHost(props: PeakHoursHostProps) {
     return aggregate(RANGE_DAYS)
   }, [aggregate])
 
-  const recomputeSummary = useCallback((fresh: boolean = false) => {
+  const recomputeSummary = useCallback((fresh: boolean = false, silent: boolean = false) => {
     if (summaryInflightRef.current) return
     summaryInflightRef.current = true
-    setSummaryLoading(true)
+    // `silent` suppresses the "Scanning session history…" loading
+    // flash. The 5-min auto-refresh tick uses silent so the chart
+    // updates without a visible state transition; user-driven
+    // fetches (hover, message tick) keep the loading flash so the
+    // user can see the work is in progress.
+    if (!silent) setSummaryLoading(true)
     // Cancel any previous in-flight host fetch so a fast hover
     // toggle never races two responses into the same state setter.
     if (hostUsageAbortRef.current !== null) hostUsageAbortRef.current.abort()
@@ -116,7 +147,7 @@ export function PeakHoursHost(props: PeakHoursHostProps) {
         if (hostUsageAbortRef.current === abort) {
           hostUsageAbortRef.current = null
           summaryInflightRef.current = false
-          setSummaryLoading(false)
+          if (!silent) setSummaryLoading(false)
         }
       }
     })()
@@ -168,11 +199,43 @@ export function PeakHoursHost(props: PeakHoursHostProps) {
 
   // Re-aggregate when a new assistant message lands. `fresh=true`
   // bypasses the host's 5-min cache so today's bucket reflects the
-  // new tokens within seconds rather than at TTL.
+  // new tokens within seconds rather than at TTL. The tick is
+  // throttled so a burst of messages (100 chat replies in 10 s)
+  // coalesces to ~2 host walks instead of 100, and the chart
+  // never lingers in the "Scanning session history…" state for
+  // most of that burst. The first message in a quiet window
+  // triggers an immediate walk; the throttling only suppresses
+  // the redundant ones inside the window.
   useEffect(() => {
     if (!hovered || subscribeMessageTick === undefined) return
-    return subscribeMessageTick(() => recomputeSummary(true))
+    let lastFreshAt = 0
+    return subscribeMessageTick(() => {
+      const now = Date.now()
+      if (now - lastFreshAt < MESSAGE_TICK_THROTTLE_MS) return
+      lastFreshAt = now
+      recomputeSummary(true)
+    })
   }, [hovered, subscribeMessageTick, recomputeSummary])
+
+  // Background refresh every 5 min while the tooltip is open. The
+  // walk is silent (no loading flash) so a user keeping the pill
+  // hovered through a long session sees the chart update in place
+  // rather than flashing "Scanning…" every 5 min. The 5-min cadence
+  // matches the balance row's host cache so both surfaces age
+  // together — when the balance refreshes, so does the chart. The
+  // interval is cleared on unmount and on tooltip close; a stale
+  // timer is the one thing worse than no timer.
+  useEffect(() => {
+    if (!hovered) return
+    const id = setInterval(() => {
+      // Silent: no "Scanning session history…" flash. The data
+      // swaps in when the walk resolves. If a user-driven fetch
+      // is already in flight, `recomputeSummary`'s inflight guard
+      // short-circuits and the interval tick is a no-op.
+      recomputeSummary(true, true)
+    }, CHART_REFRESH_MS)
+    return () => clearInterval(id)
+  }, [hovered, recomputeSummary])
 
   // Keep the tooltip's phase in sync with the live schedule. Cheap
   // (one Date allocation + arithmetic per second), and the cost is
