@@ -21,6 +21,8 @@
     { "path": "../../runtime-diagnostics/invariants" },
     { "path": "../../util/launch-environment" },
     { "path": "../../host/webserver" },
-    { "path": "../../credentials/credentials" }
+    { "path": "../../credentials/credentials" },
+    { "path": "../../llm/llm" },
+    { "path": "../../settings/settings" }
   ]
 }

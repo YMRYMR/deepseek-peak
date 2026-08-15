@@ -1,0 +1,88 @@
+/* PauseSwitch: 26 × 14 track, 10 × 10 knob, 1 px border, currentColor
+ * for the border + knob fill so the switch inherits the pill's tint and
+ * matches the pill in pre-cutover (off-peak dashed) state. The knob
+ * animates a 12 px left→right slide (200 ms); the track cross-fades its
+ * colour over the same window. */
+
+.switch {
+  display: inline-flex;
+  align-items: center;
+  position: relative;
+  width: 26px;
+  height: 14px;
+  padding: 0;
+  margin: 0 0 0 4px;
+  border-radius: 999px;
+  border: 1px solid currentColor;
+  background: transparent;
+  cursor: pointer;
+  flex: 0 0 auto;
+  /* The pill already animates color/background; keep the switch in
+   * lock-step so the two read as one element. */
+  transition: background 200ms ease, border-color 200ms ease, opacity 200ms ease;
+  /* Subtle outline focus for keyboard users; the pill itself has none. */
+  outline: none;
+}
+.switch:focus-visible {
+  box-shadow: 0 0 0 2px color-mix(in srgb, currentColor 50%, transparent);
+}
+.switch:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+.switch.error {
+  border-color: var(--dsw-color-warning, #f0b429);
+}
+
+.knob {
+  position: absolute;
+  top: 1px;
+  left: 1px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: currentColor;
+  transition: transform 200ms ease, background 200ms ease;
+  pointer-events: none;
+}
+
+/* ON: slide the knob to the right (track width 26, knob 10, padding
+ *  1 each side → 26 - 10 - 1 - 1 = 14 px travel). */
+.switch[data-on="true"] .knob {
+  transform: translateX(12px);
+}
+
+/* Track colour tints. The track is a 12 % mix of the current state
+ * colour over the pill's base — the same recipe the pill itself uses
+ * for its own background, so the two surfaces read as one element. */
+.trackOff {
+  background: color-mix(in srgb, var(--dsw-color-success, #19c37d) 12%, transparent);
+}
+.trackPausedOff {
+  background: color-mix(in srgb, var(--dsw-color-success, #19c37d) 35%, transparent);
+}
+.trackPeak {
+  background: color-mix(in srgb, var(--dsw-color-danger, #ef4444) 35%, transparent);
+}
+
+/* Queue badge: small pill in the top-right of the track, currentColor
+ * background with the pill's base as the foreground. Sits one pixel
+ * outside the track on each axis so a 3-digit number does not crowd
+ * the knob. */
+.badge {
+  position: absolute;
+  top: -5px;
+  right: -7px;
+  min-width: 12px;
+  height: 12px;
+  padding: 0 3px;
+  border-radius: 999px;
+  background: currentColor;
+  color: var(--dsw-color-bg-base, #131316);
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 12px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+}

@@ -5,15 +5,24 @@
  *
  * Auto-sizes: the pill collapses to its essentials (dot + label + countdown)
  * and lets the countdown text truncate with an ellipsis when the host utility
- * row is narrow.
+ * row is narrow. The pause switch is the last child on the right and never
+ * grows the pill — it is a fixed 26 × 14 track that lives inside the pill's
+ * own min-content height.
+ *
+ * The pause switch is owned by this component (not by `PeakHoursHost`) so
+ * the pill's affordance is always present, not just on hover. The host
+ * overlay (per-model chart + balance) lives in `PeakHoursHost`.
  */
 
 import { useEffect, useState } from 'react'
 import { currentPhase, formatCountdown, phaseLabel, type PhaseSnapshot } from './domain.ts'
+import { PauseSwitch } from './PauseSwitch.tsx'
+import { usePeakHoursState } from './peakHoursState.ts'
 import css from './PeakHoursPill.module.css'
 
 export function PeakHoursPill() {
   const [snap, setSnap] = useState<PhaseSnapshot>(() => currentPhase(new Date()))
+  const peakHours = usePeakHoursState()
 
   useEffect(() => {
     // 1 Hz keeps the countdown feeling live without paying for sub-second
@@ -25,8 +34,8 @@ export function PeakHoursPill() {
   }, [])
 
   const localBoundary = snap.nextBoundaryUtc.toLocaleTimeString([], {
-    hour: "2-digit",
-    minute: "2-digit",
+    hour: '2-digit',
+    minute: '2-digit',
     hour12: false,
   })
 
@@ -40,6 +49,8 @@ export function PeakHoursPill() {
       data-peak-hours="pill"
       data-phase={snap.phase}
       data-pre-launch={snap.preLaunch ? 'true' : 'false'}
+      data-paused={peakHours.state?.isPaused === true ? 'true' : 'false'}
+      data-blocked={peakHours.state?.isBlockedNow === true ? 'true' : 'false'}
       role="status"
       aria-live="polite"
     >
@@ -51,6 +62,12 @@ export function PeakHoursPill() {
       <span className={css.target}>
         {snap.preLaunch ? 'live' : `${snap.nextLabel} ${localBoundary}`}
       </span>
+      <PauseSwitch
+        state={peakHours.state}
+        disabled={peakHours.loading}
+        error={peakHours.error}
+        onToggle={peakHours.setPaused}
+      />
     </span>
   )
 }
