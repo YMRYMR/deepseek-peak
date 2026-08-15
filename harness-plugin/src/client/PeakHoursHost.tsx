@@ -151,9 +151,26 @@ export function PeakHoursHost(props: PeakHoursHostProps) {
     void (async () => {
       try {
         const next = await loadSummary(fresh)
-        // Drop the result if the user closed the tooltip (or a newer
-        // request superseded us) before this fetch resolved.
+        // Drop the result if a newer request superseded us before this
+        // fetch resolved. The `hostUsageAbortRef.current` check is the
+        // "newer request" case; the `abort.signal.aborted` check is
+        // the "user navigated away mid-flight" case. Both must skip
+        // the setSummary — the in-flight fetch returned either null
+        // (abort) or the in-browser trajectory aggregate
+        // (loadSummary's fallback), and replacing the cached/stale
+        // summary with either one is wrong: the fallback is a strict
+        // subset of what the user has opened in the trajectory tab,
+        // so showing it makes the chart look incomplete. We also
+        // reset `summary` to null on the user-navigated-away case so
+        // the next `onEnter` triggers a fresh fetch (the gate in
+        // onEnter is `summary === null`); otherwise the user would be
+        // stuck on the cached/empty summary until the 5-min auto-
+        // refresh fires.
         if (hostUsageAbortRef.current !== abort) return
+        if (abort.signal.aborted) {
+          setSummary(null)
+          return
+        }
         setSummary(next)
       } finally {
         if (hostUsageAbortRef.current === abort) {
