@@ -852,9 +852,18 @@ export function apply(ctx: Context): void {
 
   /** Resolve the current "is the next request blocked?" flag. The pause
    *  toggle and the 1 Hz phase tick both call this so the LLM hook reads
-   *  the latest value without recomputing it. */
+   *  the latest value without recomputing it.
+   *
+   * Pre-cutover used to gate the `&& !phaseSnap.preLaunch` clause:
+   * while the new schedule was being previewed but the pricing had not
+   * yet gone live, the gate was forced open so user messages still
+   * flowed. That preview mode is removed — the schedule and the gate
+   * are now coupled, so the gate engages whenever `isPaused && peak`
+   * regardless of the cutover state. The pill still shows the
+   * PRE-CUTOVER badge and the "→ live" countdown so the transition
+   * remains visible; only the gate's behavior changed. */
   const recomputeBlocked = (): void => {
-    isBlockedNow = isPaused && phaseSnap.phase === 'peak' && !phaseSnap.preLaunch
+    isBlockedNow = isPaused && phaseSnap.phase === 'peak'
   }
 
   /** Drain the queue strictly in arrival order. Each item's `complete`
