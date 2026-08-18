@@ -78,12 +78,20 @@ CONSTRAINTS="$HARNESS_ROOT/scripts/check-workspace-constraints.ts"
 
 if ! grep -q "@deepseek-ai/dsh-client-ui-peak-hours" "$CORDIS_PATCH"; then
   echo "==> adding ui-peak-hours row to packages/bundle/web-app/cordis.patch.yml"
-  # Append right after the ui-goal row, which is the closest analog.
-  python3 - "$CORDIS_PATCH" <<'PY' || awk -v patch="    - id: ui-peak-hours\n      name: '@deepseek-ai/dsh-client-ui-peak-hours'\n" '
-    /^    - id: ui-goal$/ && !inserted { print; print patch; inserted=1; next }
-    { print }
-    END { if (!inserted) print patch }
-  ' "$CORDIS_PATCH" > "$CORDIS_PATCH.tmp" && mv "$CORDIS_PATCH.tmp" "$CORDIS_PATCH"
+  # Insert before ui-goal so neither plugin's two-line row is split.
+  python3 - "$CORDIS_PATCH" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+text = path.read_text()
+row = "    - id: ui-peak-hours\n      name: '@deepseek-ai/dsh-client-ui-peak-hours'\n\n"
+anchor = "    - id: ui-goal\n"
+if anchor in text:
+    text = text.replace(anchor, row + anchor, 1)
+else:
+    text = text.rstrip() + "\n\n- insert:\n" + row
+path.write_text(text)
 PY
 else
   echo "==> cordis.patch.yml already references ui-peak-hours, skipping"
@@ -92,13 +100,13 @@ fi
 if ! grep -q "@deepseek-ai/dsh-client-ui-peak-hours" "$WEBAPP_PKG"; then
   echo "==> adding ui-peak-hours dep to packages/bundle/web-app/package.json"
   python3 - "$WEBAPP_PKG" <<'PY'
-  import json, sys
-  p = json.load(open(sys.argv[1]))
-  deps = p.setdefault("dependencies", {})
-  deps["@deepseek-ai/dsh-client-ui-peak-hours"] = "workspace:^"
-  p["dependencies"] = dict(sorted(deps.items()))
-  json.dump(p, open(sys.argv[1], "w"), indent=2)
-  open(sys.argv[1], "a").write("\n")
+import json, sys
+p = json.load(open(sys.argv[1]))
+deps = p.setdefault("dependencies", {})
+deps["@deepseek-ai/dsh-client-ui-peak-hours"] = "workspace:^"
+p["dependencies"] = dict(sorted(deps.items()))
+json.dump(p, open(sys.argv[1], "w"), indent=2)
+open(sys.argv[1], "a").write("\n")
 PY
 else
   echo "==> web-app/package.json already has the dep, skipping"
@@ -107,14 +115,18 @@ fi
 if ! grep -q "ui-peak-hours" "$HOST_TSCONFIG"; then
   echo "==> adding tsconfig.client.json reference"
   python3 - "$HOST_TSCONFIG" <<'PY'
-  import json, sys
-  p = json.load(open(sys.argv[1]))
-  refs = p.get("references", [])
-  if "./packages/client/ui-peak-hours" not in refs:
-    refs.append("./packages/client/ui-peak-hours")
-  p["references"] = refs
-  json.dump(p, open(sys.argv[1], "w"), indent=2)
-  open(sys.argv[1], "a").write("\n")
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+text = path.read_text()
+row = '    { "path": "./packages/client/ui-peak-hours" },\n'
+anchor = '    { "path": "./packages/client/ui-trajectory" },\n'
+if anchor in text:
+    text = text.replace(anchor, anchor + row, 1)
+else:
+    raise SystemExit('could not find ui-trajectory reference anchor in tsconfig.client.json')
+path.write_text(text)
 PY
 else
   echo "==> tsconfig.client.json already references ui-peak-hours, skipping"
@@ -123,21 +135,18 @@ fi
 if ! grep -q "@deepseek-ai/dsh-client-ui-peak-hours" "$BASE_TSCONFIG"; then
   echo "==> adding tsconfig.base.json path mapping"
   python3 - "$BASE_TSCONFIG" <<'PY'
-  import json, sys
-  p = json.load(open(sys.argv[1]))
-  paths = p["compilerOptions"]["paths"]
-  if "@deepseek-ai/dsh-client-ui-peak-hours" not in paths:
-    # Insert next to the other ui-* entries (near ui-trajectory).
-    new_paths = {}
-    inserted = False
-    for k, v in paths.items():
-      new_paths[k] = v
-      if k == "@deepseek-ai/dsh-client-ui-trajectory" and not inserted:
-        new_paths["@deepseek-ai/dsh-client-ui-peak-hours"] = ["./packages/client/ui-peak-hours/src"]
-        inserted = True
-    p["compilerOptions"]["paths"] = new_paths
-    json.dump(p, open(sys.argv[1], "w"), indent=2)
-    open(sys.argv[1], "a").write("\n")
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+text = path.read_text()
+row = '      "@deepseek-ai/dsh-client-ui-peak-hours": ["./packages/client/ui-peak-hours/src"],\n'
+anchor = '      "@deepseek-ai/dsh-client-ui-trajectory": ["./packages/client/ui-trajectory/src"],\n'
+if anchor in text:
+    text = text.replace(anchor, anchor + row, 1)
+else:
+    raise SystemExit('could not find ui-trajectory path anchor in tsconfig.base.json')
+path.write_text(text)
 PY
 else
   echo "==> tsconfig.base.json already maps ui-peak-hours, skipping"
