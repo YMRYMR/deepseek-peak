@@ -1,8 +1,8 @@
 # `@deepseek-ai/dsh-client-ui-peak-hours`
 
-Live DeepSeek V4 API peak/off-peak status pill in the session header
-utilities row, with an on-hover overlay that shows per-model daily token
-usage and the platform's current account balance.
+Cost-aware DeepSeek V4 peak/off-peak scheduler in the session header,
+with explainable task urgency admission, FIFO deferral, per-model daily
+token usage, and the platform's current account balance.
 
 | Phase    | Color  | What it means |
 | -------- | ------ | ------------- |
@@ -161,14 +161,25 @@ fetch. `cost` is computed host-side from the same `costForUsage` the
 client uses, so the per-day buckets and any future dollar total
 agree on rates.
 
-## Pause during peak
+## Smart scheduling during peak
 
 A small switch lives inside the pill, on the right. When ON and the
 current UTC hour is inside a peak window (`01:00–04:00` or
-`06:00–10:00`), the host's `llm/stream` gate holds every new chat
-message in a FIFO and dispatches them strictly in arrival order the
-moment the phase flips to off-peak. When OFF (or ON during off-peak),
-messages pass through normally.
+`06:00–10:00`), the host's `llm/stream` gate classifies the latest human
+prompt. Urgent work passes through immediately; delay-tolerant work enters
+a FIFO and dispatches strictly in arrival order the moment the phase flips
+to off-peak. The classifier is local and deterministic, so it spends no
+peak-rate tokens. When OFF (or ON during off-peak), messages pass through.
+
+The settings namespace exposes:
+
+- `schedulingMode: smart | queue-all` (default `queue-all`, preserving the
+  existing all-or-nothing behavior after an upgrade)
+- `unknownTaskPolicy: defer | run` (default `defer`)
+- `urgentKeywords: string[]` and `deferKeywords: string[]`
+
+Prompt-level overrides take precedence over every rule: `!urgent` or
+`[紧急]` runs now; `!defer` or `[延后]` waits for off-peak.
 
 ```
 ┌─ session header ───────────────────────────────────────────┐
@@ -207,8 +218,10 @@ user sends a chat message
   → ctx.llm.stream(options)  (in the host process)
         ── 'llm/stream' waterfall ──►
                             if isBlockedNow (paused && peak):
-                              enqueue({ options, next })
-                              return queuedStream(drainPromise)
+                              classify latest human prompt
+                              urgent → next()
+                              defer  → enqueue({ options, next, reason })
+                                       return queuedStream(drainPromise)
                             else:
                               return next()  (immediate dispatch)
 
@@ -235,6 +248,9 @@ user sends a chat message
   on the wire even though every agent loop has its own consumer.
 - **Process-local**: a harness restart loses the queue. The pause flag
   itself is persisted; the queue is not.
+- **Explainable**: every queued item carries the matched rule family,
+  reason, and optional matched text. Hover the row's `DEFER` badge to
+  inspect the decision, or use the send arrow to override it.
 
 ### Queue card
 

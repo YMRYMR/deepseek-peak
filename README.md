@@ -3,9 +3,9 @@
 A drop-in dsh-plugin for the
 [`deepseek-ai/deepseek-harness`](https://github.com/deepseek-ai/deepseek-harness)
 web UI that shows the DeepSeek V4 API's current peak / off-peak pricing
-state, lets you pause the LLM during peak hours with a queue that drains
-on its own, watches your account balance, and warns you when the
-balance drops below a threshold you set.
+state, classifies task urgency during peak hours, defers non-urgent work
+to a FIFO queue that drains on its own, watches your account balance,
+and warns you when the balance drops below a threshold you set.
 
 ![Peak-hours plugin showing the PEAK pill with the queue and the
 balance card expanded underneath](./docs/pill-preview.png)
@@ -27,9 +27,9 @@ threshold.*
   - A live countdown to the next phase boundary
   - A `→ live` target arrow while pre-cutover, or a `→ next phase HH:MM`
     arrow after the cutover
-  - A pause toggle at the right edge of the pill: when on AND the phase
-    is peak, the LLM stream is gated and user messages queue instead of
-    running
+  - A scheduling toggle at the right edge of the pill: when on AND the
+    phase is peak, smart mode runs urgent work immediately and queues
+    delay-tolerant work until off-peak
   - **Amber border + dot + label when the account balance drops below
     the configured `lowBalanceWarningUsd` threshold** (default $1.00).
     Overrides the phase color so a low balance is visible at a glance.
@@ -61,6 +61,13 @@ threshold.*
   Plugin configuration → Peak hours`):
   - `paused` — boolean, the same value the pill toggle writes. Two
     write paths into the same field; last write wins.
+  - `schedulingMode` — `smart` (classify each task) or `queue-all`
+    (the original all-or-nothing behavior). Default: `queue-all`, so
+    upgrading does not change the existing gate semantics.
+  - `unknownTaskPolicy` — what to do when no urgency rule matches:
+    `defer` (default) or `run`.
+  - `urgentKeywords` / `deferKeywords` — optional organization-specific
+    keyword arrays evaluated before the built-in rules.
   - `lowBalanceWarningUsd` — number, the threshold below which the
     pill switches to amber. Default `$1.00`. Zero is allowed (always
     warn); negatives are rejected by the schema.
@@ -173,14 +180,23 @@ The card expands under the pill:
 ### Pause-during-peak workflow
 
 1. Click the pill's pause switch to the right of the countdown.
-2. While the switch is on AND the phase is peak, the next LLM stream
-   (user message or subagent tool call) is gated. The harness shows
-   the request as queued, and the tooltip expands to show the queue
-   card.
+2. Set `schedulingMode: smart` in the plugin settings. While the switch is
+   on AND the phase is peak, smart mode classifies
+   the latest human prompt locally. Production incidents, security/data
+   loss, and short deadlines run now. Routine or ambiguous work queues.
+   No classifier API call is made.
 3. The queue is FIFO. Each item is dispatched the moment the switch
    flips off or the phase leaves peak.
 4. To dispatch a single item without flipping the global pause, click
    the row's per-row **send arrow** in the queue card.
+
+Exact prompt overrides always win:
+
+- `!urgent`, `/urgent`, `#urgent`, `[urgent]`, or `[紧急]` — run now.
+- `!defer`, `/defer`, `#defer`, `[defer]`, or `[延后]` — wait for off-peak.
+
+The queue card shows a `DEFER` badge. Hover it to see the decision reason
+and the matched signal.
 
 ### Low-balance warning
 
@@ -193,6 +209,10 @@ the value. Override the same field directly in `~/.dsh/settings.yaml`:
 peak-hours:
   paused: false
   lowBalanceWarningUsd: 1.5
+  schedulingMode: smart
+  unknownTaskPolicy: defer
+  urgentKeywords: ["客户演示", "发布阻塞"]
+  deferKeywords: ["夜间任务", "批量整理"]
 ```
 
 The next 2 s state poll picks up the new value automatically.

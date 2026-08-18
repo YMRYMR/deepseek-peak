@@ -1,6 +1,6 @@
 {
   "name": "@deepseek-ai/dsh-client-ui-peak-hours",
-  "description": "Live DeepSeek V4 API peak/off-peak status widget in the conversation input dock strip. Browser computes phase from the clock; host face proxies the platform's /user/balance with the harness credentials seam so the key never reaches the browser.",
+  "description": "Cost-aware DeepSeek V4 peak/off-peak scheduler with explainable task urgency admission, FIFO deferral, usage charts, and balance monitoring.",
   "version": "0.1.0-rc.5",
   "publishConfig": {
     "access": "public"
