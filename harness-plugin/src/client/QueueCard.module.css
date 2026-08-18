@@ -106,6 +106,18 @@
   opacity: 0.6;
 }
 
+.queueItemDecision {
+  flex: 0 0 auto;
+  padding: 1px 4px;
+  border: 1px solid color-mix(in srgb, currentColor 35%, transparent);
+  border-radius: 999px;
+  font-family: var(--dsw-font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  opacity: 0.75;
+}
+
 /* Send arrow: a small right-pointing chevron on the right edge of
  * the row, with the same `currentColor` as the card so it inherits
  * the peak/off-peak tint. The button is `background: transparent`
