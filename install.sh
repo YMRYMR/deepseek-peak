@@ -153,22 +153,64 @@ else
 fi
 
 # ── install + build ──────────────────────────────────────────────────────
-echo
-echo "==> running pnpm install in the harness"
-( cd "$HARNESS_ROOT" && pnpm install )
+# The wire-up above is the durable part of the install. The build steps
+# below may fail in environments where the harness's own build pipeline
+# is in a weird state (missing host lib, version mismatch, network).
+# We run them defensively, collect any failures, and always reach the
+# summary so the user has a clear recovery path. Re-running the script
+# is safe — the wire-up is idempotent and the build steps can be retried
+# individually with the commands printed below.
+
+BUILD_FAILS=()
+build_step() {
+  local label="$1"
+  local cmd="$2"
+  echo
+  echo "==> $label"
+  if ( cd "$HARNESS_ROOT" && bash -c "$cmd" ); then
+    echo "    ok"
+  else
+    local rc=$?
+    echo "    FAILED (exit $rc)"
+    BUILD_FAILS+=("$label")
+    echo "    the wire-up is already complete; retry this step manually:"
+    echo "      ( cd \"$HARNESS_ROOT\" && $cmd )"
+  fi
+}
+
+# Disable exit-on-error for the build phase; we collect failures instead.
+# The wire-up above is already past `set -e`, so this is safe.
+set +e
+
+build_step "running pnpm install in the harness" \
+  "pnpm install"
+
+build_step "building the harness host lib" \
+  "pnpm run build:lib:host"
+
+build_step "building the plugin client bundle" \
+  "pnpm --filter @deepseek-ai/dsh-client-ui-peak-hours run bundle"
+
+set -e
 
 echo
-echo "==> building the harness host lib"
-( cd "$HARNESS_ROOT" && pnpm run build:lib:host )
+echo "==> verifying (advisory only — failures here are never blocking)"
+( cd "$HARNESS_ROOT" && pnpm run verify-cordis-config ) \
+  || echo "    verify-cordis-config: FAILED (advisory)"
+( cd "$HARNESS_ROOT" && pnpm run verify-package-invariants ) \
+  || echo "    verify-package-invariants: FAILED (advisory)"
 
 echo
-echo "==> building the plugin client bundle"
-( cd "$HARNESS_ROOT" && pnpm --filter @deepseek-ai/dsh-client-ui-peak-hours run bundle )
-
-echo
-echo "==> verifying"
-( cd "$HARNESS_ROOT" && pnpm run verify-cordis-config ) || true
-( cd "$HARNESS_ROOT" && pnpm run verify-package-invariants ) || true
+echo "==> install summary:"
+echo "    wire-up      : ok (plugin source + 4 wire-up edits applied; idempotent on re-run)"
+if [[ ${#BUILD_FAILS[@]} -eq 0 ]]; then
+  echo "    build steps  : all 3 passed"
+else
+  echo "    build steps  : ${#BUILD_FAILS[@]} of 3 failed (the wire-up is still good; retry manually):"
+  for label in "${BUILD_FAILS[@]}"; do
+    echo "      - $label"
+  done
+fi
 
 echo
 echo "==> done. to start the harness:"
