@@ -73,6 +73,13 @@ import type { WebServer } from '@deepseek-ai/dsh-host-webserver'
 import z from '@deepseek-ai/schemastery'
 import { currentPhase, isPeak, type Phase, type PhaseSnapshot } from './phase.ts'
 import { costForUsage, type TokenUsage as PricingUsage } from './client/pricing.ts'
+import {
+  classifyUrgency,
+  type UrgencyDecision,
+  type UrgencyPolicy,
+  type UrgencyResult,
+  type UrgencySource,
+} from './urgency.ts'
 
 /** Cordis plugin name used by loader diagnostics. */
 export const name = 'ui-peak-hours'
@@ -613,6 +620,10 @@ const STATE_NS = settingsNamespace('peak-hours')
 interface PeakHoursConfig {
   paused: boolean
   lowBalanceWarningUsd: number
+  schedulingMode: 'smart' | 'queue-all'
+  unknownTaskPolicy: UrgencyDecision
+  urgentKeywords: string[]
+  deferKeywords: string[]
 }
 
 const Config: z<PeakHoursConfig> = z.object({
@@ -622,6 +633,10 @@ const Config: z<PeakHoursConfig> = z.object({
   // Negative values are rejected by the schema so a typo can't
   // accidentally invert the comparison.
   lowBalanceWarningUsd: z.number().min(0).default(1.0),
+  schedulingMode: z.union(['smart', 'queue-all']).default('queue-all'),
+  unknownTaskPolicy: z.union(['defer', 'run']).default('defer'),
+  urgentKeywords: z.array(String).default([]),
+  deferKeywords: z.array(String).default([]),
 })
 
 /** How often the host recomputes the phase (and watches for a boundary
@@ -654,6 +669,10 @@ const QUEUE_WIRE_ITEM_CAP = 100
 interface QueueItemWire {
   readonly prompt: string
   readonly enqueuedAt: number
+  readonly decision: UrgencyDecision
+  readonly decisionSource: UrgencySource
+  readonly decisionReason: string
+  readonly matched?: string
 }
 
 /**
@@ -684,6 +703,24 @@ function extractUserPrompt(options: GenerateOptions): string {
   return ''
 }
 
+/**
+ * Extract the latest human-authored prompt. Tool-result messages also use the
+ * `user` role, so classification must check `source.kind` or a tool output
+ * containing words such as "incident" could incorrectly bypass the gate.
+ */
+function extractHumanPrompt(options: GenerateOptions): string {
+  for (let i = options.messages.length - 1; i >= 0; i--) {
+    const message = options.messages[i]
+    if (message === undefined || message.role !== 'user' || message.source.kind !== 'user') continue
+    const parts: string[] = []
+    for (const block of message.content) {
+      if (block.type === 'text') parts.push(block.text)
+    }
+    if (parts.length > 0) return parts.join('\n')
+  }
+  return ''
+}
+
 /** JSON envelope the host always returns. */
 export interface StateJsonSuccess {
   readonly ok: true
@@ -710,6 +747,10 @@ export interface StateJsonSuccess {
     readonly queue: readonly QueueItemWire[]
     /** Number of items not in `queue` because of the cap. */
     readonly queueOverflow: number
+    /** Admission policy used for new requests while the gate is active. */
+    readonly schedulingMode: 'smart' | 'queue-all'
+    /** Fallback for prompts with no decisive urgency signal. */
+    readonly unknownTaskPolicy: UrgencyDecision
     /** Dollar amount below which the pill switches to its warning style.
      *  Mirrors the persisted `lowBalanceWarningUsd` setting so a change
      *  in the host's settings (TUI, CLI, etc.) reaches the browser
@@ -750,6 +791,8 @@ interface QueueItem {
   /** Wall-clock ms when this item was enqueued; reported in the queue
    *  endpoint for the UI's "queued for X" affordance. */
   readonly enqueuedAt: number
+  /** Explainable decision that admitted this item to the deferred queue. */
+  readonly urgency: UrgencyResult
 }
 
 function emptyState(
@@ -757,13 +800,22 @@ function emptyState(
   isPaused: boolean,
   queue: readonly QueueItem[],
   lowBalanceWarningUsd: number,
+  schedulingMode: 'smart' | 'queue-all',
+  unknownTaskPolicy: UrgencyDecision,
 ): StateJsonSuccess {
   const wireQueue: QueueItemWire[] = []
   const cap = Math.min(queue.length, QUEUE_WIRE_ITEM_CAP)
   for (let i = 0; i < cap; i++) {
     const item = queue[i]
     if (item === undefined) continue
-    wireQueue.push({ prompt: extractUserPrompt(item.options), enqueuedAt: item.enqueuedAt })
+    wireQueue.push({
+      prompt: extractUserPrompt(item.options),
+      enqueuedAt: item.enqueuedAt,
+      decision: item.urgency.decision,
+      decisionSource: item.urgency.source,
+      decisionReason: item.urgency.reason,
+      ...item.urgency.matched === undefined ? {} : { matched: item.urgency.matched },
+    })
   }
   return {
     ok: true,
@@ -771,12 +823,14 @@ function emptyState(
       isPaused,
       phase: phaseSnap.phase,
       preLaunch: phaseSnap.preLaunch,
-      isBlockedNow: isPaused && phaseSnap.phase === 'peak' && !phaseSnap.preLaunch,
+      isBlockedNow: isPaused && phaseSnap.phase === 'peak',
       nextPhaseAt: phaseSnap.nextBoundaryUtc.getTime(),
       cutoverAt: phaseSnap.preLaunch ? phaseSnap.nextBoundaryUtc.getTime() : -1,
       queueSize: Math.min(queue.length, QUEUE_DISPLAY_CAP),
       queue: wireQueue,
       queueOverflow: Math.max(0, queue.length - wireQueue.length),
+      schedulingMode,
+      unknownTaskPolicy,
       lowBalanceWarningUsd,
       refreshedAt: Date.now(),
     },
@@ -913,13 +967,26 @@ export function apply(ctx: Context): void {
    *  callback so registration waits for the settings service without
    *  blocking the rest of `apply()`. */
 
-  const initialConfig: PeakHoursConfig = { paused: false, lowBalanceWarningUsd: 1.0 }
+  const initialConfig: PeakHoursConfig = {
+    paused: false,
+    lowBalanceWarningUsd: 1.0,
+    schedulingMode: 'queue-all',
+    unknownTaskPolicy: 'defer',
+    urgentKeywords: [],
+    deferKeywords: [],
+  }
   // Live copy of the warning threshold. Read at attach from the
   // settings scope, updated on the watch so a change from outside
   // the plugin (TUI, CLI, settings file) reaches the next /state
   // response on the next tick. The closure variable is the source
   // of truth for `emptyState`; the browser never recomputes it.
   let lowBalanceWarningUsd = 1.0
+  let schedulingMode: PeakHoursConfig['schedulingMode'] = 'queue-all'
+  let urgencyPolicy: UrgencyPolicy = {
+    unknownTaskPolicy: 'defer',
+    urgentKeywords: [],
+    deferKeywords: [],
+  }
   // The scope is created inside the inject callback; `null` until the
   // settings service is ready. The POST handler awaits this getter to
   // serialize toggle writes. The current code path uses
@@ -943,6 +1010,12 @@ export function apply(ctx: Context): void {
       const v = source()
       isPaused = v.paused
       lowBalanceWarningUsd = v.lowBalanceWarningUsd
+      schedulingMode = v.schedulingMode
+      urgencyPolicy = {
+        unknownTaskPolicy: v.unknownTaskPolicy,
+        urgentKeywords: v.urgentKeywords,
+        deferKeywords: v.deferKeywords,
+      }
       recomputeBlocked()
       if (!isBlockedNow) void drainQueue()
     },
@@ -971,12 +1044,23 @@ export function apply(ctx: Context): void {
    *  runs on the inner stream and validates the merged output. */
 
   ctx.on('llm/stream', (options: GenerateOptions, next: () => AsyncIterable<StreamChunk>) => {
-    if (!isBlockedNow) {
+    if (!isBlockedNow || options.purpose !== undefined) {
       // Fast path: pass-through. Returning the inner iterable directly
       // is what the invariant does; it preserves the waterfall
-      // contract (the invariant validates the inner shape).
+      // contract (the invariant validates the inner shape). Auxiliary
+      // calls such as title generation and compaction are never treated
+      // as a new user task, so they also bypass admission classification.
       return next()
     }
+    const urgency: UrgencyResult = schedulingMode === 'queue-all'
+      ? {
+        decision: 'defer',
+        source: 'default',
+        reason: 'queue-all mode defers every peak-hour task',
+      }
+      : classifyUrgency(extractHumanPrompt(options), urgencyPolicy)
+    if (urgency.decision === 'run') return next()
+
     // Blocked path: enqueue and return a stream that blocks until
     // the drainer fires. `drain`/`complete` are one-shot resolvers;
     // both are called at most once.
@@ -989,6 +1073,7 @@ export function apply(ctx: Context): void {
       drain,
       complete: () => {},
       enqueuedAt: Date.now(),
+      urgency,
     }
     queue.push(item)
     const signal = options.signal
@@ -1109,7 +1194,9 @@ export function apply(ctx: Context): void {
       path: STATE_ROUTE,
       handler: async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
         if (req.method === 'GET' || req.method === 'HEAD') {
-          writeJson(res, 200, emptyState(phaseSnap, isPaused, queue, lowBalanceWarningUsd))
+          writeJson(res, 200, emptyState(
+            phaseSnap, isPaused, queue, lowBalanceWarningUsd, schedulingMode, urgencyPolicy.unknownTaskPolicy,
+          ))
           return
         }
         if (req.method !== 'POST') {
@@ -1152,7 +1239,9 @@ export function apply(ctx: Context): void {
           }
         }
         if (!isBlockedNow) void drainQueue()
-        writeJson(res, 200, emptyState(phaseSnap, isPaused, queue, lowBalanceWarningUsd))
+        writeJson(res, 200, emptyState(
+          phaseSnap, isPaused, queue, lowBalanceWarningUsd, schedulingMode, urgencyPolicy.unknownTaskPolicy,
+        ))
       },
     })
 
@@ -1232,6 +1321,10 @@ export function apply(ctx: Context): void {
         const wire: QueueItemWire = {
           prompt: extractUserPrompt(item.options),
           enqueuedAt: item.enqueuedAt,
+          decision: item.urgency.decision,
+          decisionSource: item.urgency.source,
+          decisionReason: item.urgency.reason,
+          ...item.urgency.matched === undefined ? {} : { matched: item.urgency.matched },
         }
         writeJson(res, 200, { ok: true, dispatched: wire } satisfies DispatchJsonSuccess)
       },

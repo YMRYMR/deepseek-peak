@@ -24,6 +24,10 @@ import type { Phase } from './domain.ts'
 export interface QueueItemView {
   readonly prompt: string
   readonly enqueuedAt: number
+  readonly decision: 'run' | 'defer'
+  readonly decisionSource: 'explicit' | 'configured-keyword' | 'incident' | 'deadline' | 'routine' | 'default'
+  readonly decisionReason: string
+  readonly matched?: string
 }
 
 /** Wire shape mirrored from `src/index.ts` `StateJsonSuccess.state`. */
@@ -41,6 +45,10 @@ export interface PeakHoursState {
   readonly queue: readonly QueueItemView[]
   /** Count of items not in `queue` because of the wire cap. */
   readonly queueOverflow: number
+  /** Whether peak-hour admission classifies each task or queues all calls. */
+  readonly schedulingMode: 'smart' | 'queue-all'
+  /** Fallback used by smart mode for an ambiguous prompt. */
+  readonly unknownTaskPolicy: 'run' | 'defer'
   /** Dollar amount below which the pill switches to its warning style.
    *  Mirrors the host's persisted `lowBalanceWarningUsd` setting.
    *  The browser never persists or recomputes this; it just reads
@@ -107,7 +115,27 @@ function readState(json: StateJson): PeakHoursState | null {
       const item = raw as Record<string, unknown>
       const prompt = typeof item.prompt === 'string' ? item.prompt : ''
       const enqueuedAt = typeof item.enqueuedAt === 'number' ? item.enqueuedAt : Date.now()
-      queue.push({ prompt, enqueuedAt })
+      const decision = item.decision === 'run' ? 'run' : 'defer'
+      const rawSource = item.decisionSource
+      const decisionSource = rawSource === 'explicit'
+        || rawSource === 'configured-keyword'
+        || rawSource === 'incident'
+        || rawSource === 'deadline'
+        || rawSource === 'routine'
+        ? rawSource
+        : 'default'
+      const decisionReason = typeof item.decisionReason === 'string'
+        ? item.decisionReason
+        : 'deferred until off-peak'
+      const matched = typeof item.matched === 'string' ? item.matched : undefined
+      queue.push({
+        prompt,
+        enqueuedAt,
+        decision,
+        decisionSource,
+        decisionReason,
+        ...matched === undefined ? {} : { matched },
+      })
     }
   }
   return {
@@ -120,6 +148,8 @@ function readState(json: StateJson): PeakHoursState | null {
     queueSize: typeof s.queueSize === 'number' ? s.queueSize : 0,
     queue,
     queueOverflow: typeof s.queueOverflow === 'number' ? s.queueOverflow : 0,
+    schedulingMode: s.schedulingMode === 'smart' ? 'smart' : 'queue-all',
+    unknownTaskPolicy: s.unknownTaskPolicy === 'run' ? 'run' : 'defer',
     // `lowBalanceWarningUsd` is a 0-or-positive USD amount. Coerce
     // non-numbers and negatives to the conservative default of $1
     // rather than NaN/negative — the comparison is `balance < threshold`

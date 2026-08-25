@@ -78,6 +78,9 @@ export function QueueCard(props: QueueCardProps) {
             // text lives in the `title` attribute for hover.
             const headline = firstLine(item.prompt)
             const isFront = idx === 0
+            const decisionTitle = item.matched === undefined
+              ? item.decisionReason
+              : `${item.decisionReason} (matched: ${item.matched})`
             // Only the front item gets a live send button. Later
             // items render a ghost arrow (the row's layout is
             // uniform, but the disabled cursor / no-click target
@@ -94,6 +97,13 @@ export function QueueCard(props: QueueCardProps) {
               >
                 <span className={css.queueItemText}>
                   {headline || <span className={css.queueItemEmpty}>(empty message)</span>}
+                </span>
+                <span
+                  className={css.queueItemDecision}
+                  title={decisionTitle}
+                  data-decision-source={item.decisionSource}
+                >
+                  DEFER
                 </span>
                 {onDispatch !== undefined && (
                   <button
